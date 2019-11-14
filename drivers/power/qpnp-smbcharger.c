@@ -239,8 +239,6 @@ struct smbchg_chip {
 	unsigned int			usb_therm_lvl_sel;
 	unsigned int			*usb_thermal_mitigation;
 	unsigned int			usb_prev_therm_lvl;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	unsigned int			prev_black_call_mode;
 	unsigned int			prev_quick_charge_mode;
 #endif
@@ -281,6 +279,7 @@ struct smbchg_chip {
 #endif
 	struct power_supply		*bms_psy;
 	struct power_supply		*typec_psy;
+	struct power_supply		*dpdm_psy;
 	int				dc_psy_type;
 	const char			*bms_psy_name;
 	const char			*battery_psy_name;
@@ -292,13 +291,9 @@ struct smbchg_chip {
 	struct delayed_work		vfloat_adjust_work;
 	struct delayed_work		hvdcp_det_work;
 #ifdef CONFIG_VENDOR_LEECO
-	struct delayed_work	    letv_pd_set_vol_cur_work;
+	struct delayed_work		letv_pd_set_vol_cur_work;
 	struct delayed_work		pd_charger_init_work;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct delayed_work		weak_charger_timeout_work;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct delayed_work	    	first_detect_float_work;
 #endif
 
@@ -310,8 +305,6 @@ struct smbchg_chip {
 	struct mutex			therm_lvl_lock;
 #ifdef CONFIG_VENDOR_LEECO
 	struct mutex			usb_therm_lvl_lock;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct mutex			black_call_mode_lock;
 	struct mutex			quick_charge_mode_lock;
 #endif
@@ -476,7 +469,7 @@ extern char g_boot_mode[];
 
 #ifdef CONFIG_VENDOR_LEECO
 /* maybe unused? */
-	/* battery charging disabled while system thermal levels rise */
+/* battery charging disabled while system thermal levels rise */
 #define BATTCHG_THERMAL_EN_VOTER "BATTCHG_THERMAL_EN_VOTER"
 #endif
 
@@ -2399,12 +2392,18 @@ static bool smbchg_is_usbin_active_pwr_src(struct smbchg_chip *chip)
 
 static void smbchg_detect_parallel_charger(struct smbchg_chip *chip)
 {
+	int rc;
 	struct power_supply *parallel_psy = get_parallel_psy(chip);
+	union power_supply_propval pval = {0, };
 
-	if (parallel_psy)
-		chip->parallel_charger_detected =
-			power_supply_set_present(parallel_psy, true) ?
-								false : true;
+	if (parallel_psy) {
+		pval.intval = true;
+		rc = power_supply_set_property(parallel_psy,
+				POWER_SUPPLY_PROP_PRESENT, &pval);
+		chip->parallel_charger_detected = rc ? false : true;
+		if (rc)
+			pr_debug("parallel-charger absent rc=%d\n", rc);
+	}
 }
 
 static int smbchg_parallel_usb_charging_en(struct smbchg_chip *chip, bool en)
@@ -4837,19 +4836,27 @@ static int smbchg_config_chg_battery_type(struct smbchg_chip *chip)
 	if (chip->battery_type && !strcmp(prop.strval, chip->battery_type))
 		return 0;
 
+	chip->battery_type = prop.strval;
 	batt_node = of_parse_phandle(node, "qcom,battery-data", 0);
 	if (!batt_node) {
 		pr_smb(PR_MISC, "No batterydata available\n");
 		return 0;
 	}
 
+	rc = power_supply_get_property(chip->bms_psy,
+			POWER_SUPPLY_PROP_RESISTANCE_ID, &prop);
+	if (rc < 0) {
+		pr_smb(PR_STATUS, "Unable to read battery-id rc=%d\n", rc);
+		return 0;
+	}
+
 	profile_node = of_batterydata_get_best_profile(batt_node,
 							"bms", NULL);
-	if (!profile_node) {
-		pr_err("couldn't find profile handle\n");
-		return -EINVAL;
+	if (IS_ERR_OR_NULL(profile_node)) {
+		rc = PTR_ERR(profile_node);
+		pr_err("couldn't find profile handle %d\n", rc);
+		return rc;
 	}
-	chip->battery_type = prop.strval;
 
 	/* change vfloat */
 	rc = of_property_read_u32(profile_node, "qcom,max-voltage-uv",
@@ -5887,6 +5894,13 @@ static int set_usb_psy_dp_dm(struct smbchg_chip *chip, int state)
 	int rc;
 	u8 reg;
 
+	if (!chip->dpdm_psy)
+		chip->dpdm_psy = power_supply_get_by_name("dpdm");
+
+	if (!chip->dpdm_psy) {
+		pr_err("dpdm_psy not found\n");
+		return -EINVAL;
+	}
 	/*
 	 * ensure that we are not in the middle of an insertion where usbin_uv
 	 * is low and src_detect hasnt gone high. If so force dp=F dm=F
@@ -5898,7 +5912,7 @@ static int set_usb_psy_dp_dm(struct smbchg_chip *chip, int state)
 				state, POWER_SUPPLY_DP_DM_DPF_DMF);
 		state = POWER_SUPPLY_DP_DM_DPF_DMF;
 	}
-	pr_smb(PR_MISC, "setting usb psy dp dm = %d\n", state);
+	pr_smb(PR_MISC, "setting dpdm psy = %d\n", state);
 	return power_supply_set_dp_dm(chip->usb_psy, state);
 }
 
@@ -7038,8 +7052,7 @@ static int smbchg_dp_dm(struct smbchg_chip *chip, int val)
 		break;
 	case POWER_SUPPLY_DP_DM_DP_PULSE:
 		if (chip->schg_version == QPNP_SCHG)
-			rc = set_usb_psy_dp_dm(chip,
-					POWER_SUPPLY_DP_DM_DP_PULSE);
+			rc = set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DP_PULSE);
 		else
 			rc = smbchg_dp_pulse_lite(chip);
 		if (!rc)
@@ -7048,8 +7061,7 @@ static int smbchg_dp_dm(struct smbchg_chip *chip, int val)
 		break;
 	case POWER_SUPPLY_DP_DM_DM_PULSE:
 		if (chip->schg_version == QPNP_SCHG)
-			rc = set_usb_psy_dp_dm(chip,
-					POWER_SUPPLY_DP_DM_DM_PULSE);
+			rc = set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DM_PULSE);
 		else
 			rc = smbchg_dm_pulse_lite(chip);
 		if (!rc && chip->pulse_cnt)
@@ -10854,6 +10866,8 @@ unregister_batt_psy:
 out:
 	handle_usb_removal(chip);
 votables_cleanup:
+	if (chip->hvdcp_enable_votable)
+		destroy_votable(chip->hvdcp_enable_votable);
 	if (chip->aicl_deglitch_short_votable)
 		destroy_votable(chip->aicl_deglitch_short_votable);
 	if (chip->hw_aicl_rerun_enable_indirect_votable)

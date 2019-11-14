@@ -1389,6 +1389,22 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 	if (rc)
 		return rc;
 
+	/* enable/disable charging by suspending usb */
+	rc = smb1351_usb_suspend(chip, USER, chip->usb_suspended_status);
+	if (rc) {
+		pr_err("Unable to %s USB input. rc=%d\n",
+			chip->usb_suspended_status ? "" : "un-", rc);
+		return rc;
+	}
+
+	/* enable/disable battery charging */
+	rc = smb1351_battchg_disable(chip, USER, chip->battchg_disabled_status);
+	if (rc)
+		pr_err("Couldn't %s charging rc = %d\n",
+			chip->battchg_disabled_status ? "disable" : "enable", rc);
+
+	return rc;
+
 	/* setup battery missing source */
 	reg = BATT_MISSING_THERM_PIN_SOURCE_BIT;
 	mask = BATT_MISSING_THERM_PIN_SOURCE_BIT;
@@ -1520,6 +1536,14 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 		}
 	}
 
+	/* disable watchdog */
+	rc = smb1351_masked_write(chip, WDOG_SAFETY_TIMER_CTRL_REG,
+				WDOG_TIMER_EN_BIT, 0);
+	if (rc) {
+		pr_err("Couldn't disable watchdog rc = %d\n", rc);
+		return rc;
+	}
+
 	/* Update switching frequency based on device tree entry */
 	if (chip->switch_freq != -EINVAL) {
 		rc = smb1351_masked_write(chip, OTG_TLIM_CTRL_REG,
@@ -1577,21 +1601,6 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 		pr_err("Failed to enable HVDCP, rc=%d\n", rc);
 		return rc;
 	}
-
-	/* enable/disable charging by suspending usb */
-	rc = smb1351_usb_suspend(chip, USER, chip->usb_suspended_status);
-	if (rc) {
-		pr_err("Unable to %s USB input. rc=%d\n",
-			chip->usb_suspended_status ? "suspend" : "enable", rc);
-		return rc;
-	}
-
-	rc = smb1351_battchg_disable(chip, USER, chip->usb_suspended_status);
-	if (rc)
-		pr_err("Couldn't %s charging rc = %d\n",
-			chip->usb_suspended_status ? "disable" : "enable", rc);
-
-	return rc;
 }
 
 static enum power_supply_property smb1351_battery_properties[] = {
@@ -1600,6 +1609,8 @@ static enum power_supply_property smb1351_battery_properties[] = {
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_PARALLEL_MODE,
+	POWER_SUPPLY_PROP_INPUT_SUSPEND,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_TEMP,
@@ -2587,7 +2598,7 @@ static int smb1351_parallel_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		if (chip->parallel_charger_present &&
 			(chip->vfloat_mv != val->intval)) {
-			rc = smb1351_float_voltage_set(chip, val->intval);
+			rc = smb1351_float_voltage_set(chip, chip->vfloat_mv);
 			if (!rc)
 				chip->vfloat_mv = val->intval;
 		} else {
@@ -2832,6 +2843,11 @@ static void smb1351_chg_adc_notification(enum qpnp_tm_state state, void *ctx)
 			chip->adc_param.high_temp =
 				chip->batt_hot_decidegc + HYSTERESIS_DECIDEGC;
 		}
+	}
+
+	if (!cur) {		
+		pr_err("invalid transaction: state %d, temp %d\n", state, temp);		
+		return;		
 	}
 
 	if (cur->batt_present)
@@ -4232,6 +4248,9 @@ static int smb1351_parse_dt(struct smb1351_charger *chip)
 
 	chip->usb_suspended_status = of_property_read_bool(node,
 					"qcom,charging-disabled");
+
+	chip->battchg_disabled_status = of_property_read_bool(node,
+				"qcom,batt-charging-disabled");
 
 	chip->chg_autonomous_mode = of_property_read_bool(node,
 					"qcom,chg-autonomous-mode");
