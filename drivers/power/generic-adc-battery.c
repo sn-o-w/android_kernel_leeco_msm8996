@@ -159,7 +159,7 @@ static int gab_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		gab_get_status(adc_bat);
+		val->intval = gab_get_status(adc_bat);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_EMPTY_DESIGN:
 		val->intval = 0;
@@ -205,7 +205,7 @@ static void gab_work(struct work_struct *work)
 	bool is_plugged;
 	int status;
 
-	delayed_work = container_of(work, struct delayed_work, work);
+	delayed_work = to_delayed_work(work);
 	adc_bat = container_of(delayed_work, struct gab, bat_work);
 	pdata = adc_bat->pdata;
 	status = adc_bat->status;
@@ -241,10 +241,10 @@ static int gab_probe(struct platform_device *pdev)
 	struct gab *adc_bat;
 	struct power_supply *psy;
 	struct gab_platform_data *pdata = pdev->dev.platform_data;
-	enum power_supply_property *properties;
 	int ret = 0;
 	int chan;
-	int index = 0;
+	int index = ARRAY_SIZE(gab_props);
+	bool any = false;
 
 	adc_bat = devm_kzalloc(&pdev->dev, sizeof(*adc_bat), GFP_KERNEL);
 	if (!adc_bat) {
@@ -276,8 +276,6 @@ static int gab_probe(struct platform_device *pdev)
 	}
 
 	memcpy(psy->properties, gab_props, sizeof(gab_props));
-	properties = (enum power_supply_property *)
-				((char *)psy->properties + sizeof(gab_props));
 
 	/*
 	 * getting channel from iio and copying the battery properties
@@ -291,15 +289,22 @@ static int gab_probe(struct platform_device *pdev)
 			adc_bat->channel[chan] = NULL;
 		} else {
 			/* copying properties for supported channels only */
-			memcpy(properties + sizeof(*(psy->properties)) * index,
-					&gab_dyn_props[chan],
-					sizeof(gab_dyn_props[chan]));
-			index++;
+			int index2;
+
+			for (index2 = 0; index2 < index; index2++) {
+				if (psy->properties[index2] ==
+				    gab_dyn_props[chan])
+					break;	/* already known */
+			}
+			if (index2 == index)	/* really new */
+				psy->properties[index++] =
+					gab_dyn_props[chan];
+			any = true;
 		}
 	}
 
 	/* none of the channels are supported so let's bail out */
-	if (index == 0) {
+	if (!any) {
 		ret = -ENODEV;
 		goto second_mem_fail;
 	}
@@ -310,7 +315,7 @@ static int gab_probe(struct platform_device *pdev)
 	 * as come channels may be not be supported by the device.So
 	 * we need to take care of that.
 	 */
-	psy->num_properties = ARRAY_SIZE(gab_props) + index;
+	psy->num_properties = index;
 
 	ret = power_supply_register(&pdev->dev, psy);
 	if (ret)
@@ -377,8 +382,7 @@ static int gab_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int gab_suspend(struct device *dev)
+static int __maybe_unused gab_suspend(struct device *dev)
 {
 	struct gab *adc_bat = dev_get_drvdata(dev);
 
@@ -387,7 +391,7 @@ static int gab_suspend(struct device *dev)
 	return 0;
 }
 
-static int gab_resume(struct device *dev)
+static int __maybe_unused gab_resume(struct device *dev)
 {
 	struct gab *adc_bat = dev_get_drvdata(dev);
 	struct gab_platform_data *pdata = adc_bat->pdata;
@@ -401,21 +405,13 @@ static int gab_resume(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops gab_pm_ops = {
-	.suspend        = gab_suspend,
-	.resume         = gab_resume,
-};
-
-#define GAB_PM_OPS       (&gab_pm_ops)
-#else
-#define GAB_PM_OPS       (NULL)
-#endif
+static SIMPLE_DEV_PM_OPS(gab_pm_ops, gab_suspend, gab_resume);
 
 static struct platform_driver gab_driver = {
 	.driver		= {
 		.name	= "generic-adc-battery",
 		.owner	= THIS_MODULE,
-		.pm	= GAB_PM_OPS
+		.pm	= &gab_pm_ops,
 	},
 	.probe		= gab_probe,
 	.remove		= gab_remove,

@@ -326,7 +326,7 @@ struct fg_irq_info {
 };
 
 struct fg_circ_buf {
-	int	arr[20];
+	int	arr[10];
 	int	size;
 	int	head;
 };
@@ -497,6 +497,7 @@ extern bool is_qnovo_en(struct fg_chip *chip);
 extern void fg_circ_buf_add(struct fg_circ_buf *, int);
 extern void fg_circ_buf_clr(struct fg_circ_buf *);
 extern int fg_circ_buf_avg(struct fg_circ_buf *, int *);
+extern int fg_circ_buf_median(struct fg_circ_buf *buf, int *median);
 extern int fg_lerp(const struct fg_pt *, size_t, s32, s32 *);
 void fg_stay_awake(struct fg_chip *chip, int awake_reason);
 void fg_relax(struct fg_chip *chip, int awake_reason);

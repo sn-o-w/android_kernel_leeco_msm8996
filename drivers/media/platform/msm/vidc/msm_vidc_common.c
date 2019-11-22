@@ -556,8 +556,10 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 		else
 			vote_data[i].fps = inst->prop.fps;
 
-		if (msm_comm_turbo_session(inst))
-			vote_data[i].power_mode = VIDC_POWER_TURBO;
+		if (msm_comm_turbo_session(inst)) {
+			if (msm_comm_get_inst_load(inst, LOAD_CALC_NO_QUIRKS))
+				vote_data[i].power_mode = VIDC_POWER_TURBO;
+		}
 		else if (is_low_power_session(inst))
 			vote_data[i].power_mode = VIDC_POWER_LOW;
 		else
@@ -1080,7 +1082,7 @@ static void handle_event_change(enum hal_command_response cmd, void *data)
 
 	if (!event_notify) {
 		dprintk(VIDC_WARN, "Got an empty event from hfi\n");
-		goto err_bad_event;
+		return;
 	}
 
 	inst = get_inst(get_vidc_core(event_notify->device_id),
@@ -3689,7 +3691,7 @@ static int request_seq_header(struct msm_vidc_inst *inst,
  */
 int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 {
-	int rc, capture_count, output_count;
+	int rc = 0, capture_count, output_count;
 	struct msm_vidc_core *core;
 	struct hfi_device *hdev;
 	struct {
@@ -3720,6 +3722,7 @@ int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 		temp = kzalloc(sizeof(*temp), GFP_KERNEL);
 		if (!temp) {
 			dprintk(VIDC_ERR, "Out of memory\n");
+			rc = -ENOMEM;
 			goto err_no_mem;
 		}
 
@@ -3774,6 +3777,7 @@ int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 
 		kfree(ftbs.data);
 		ftbs.data = NULL;
+		rc = -ENOMEM;
 		goto err_no_mem;
 	}
 

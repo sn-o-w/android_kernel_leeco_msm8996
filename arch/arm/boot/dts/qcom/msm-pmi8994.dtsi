@@ -164,7 +164,7 @@
 			qcom,ibat-offset-numerator = <1200>;
 			qcom,ibat-offset-denominator = <1>;
 			qcom,ibat-polling-delay-ms = <100>;
-			qcom,inhibit-derating-ua = <550000>;
+			qcom,inhibit-derating-ua = <0>;
 		};
 
 		pmi8994_vadc: vadc@3100 {
@@ -316,7 +316,7 @@
 			compatible = "qcom,qpnp-fg";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			qcom,resume-soc = <95>;
+			qcom,resume-soc = <99>;
 			status = "okay";
 			qcom,bcl-lm-threshold-ma = <127>;
 			qcom,bcl-mh-threshold-ma = <405>;
@@ -327,6 +327,9 @@
 			qcom,fg-cc-cv-threshold-mv = <4340>;
 			qcom,pmic-revid = <&pmi8994_revid>;
 			qcom,capacity-learning-feedback;
+			qcom,low-batt-temp-comp;
+			qcom,fg-force-restart-enable;
+			qcom,fg-restore-batt-info;
 
 			qcom,fg-soc@4000 {
 				status = "okay";
@@ -555,9 +558,9 @@
 			interrupts = <0x3 0xc0 0x0>,
 				     <0x3 0xc0 0x1>;
 			interrupt-names = "sc-irq", "play-irq";
-			qcom,pmic-revid = <&pmi8994_revid>;
 			vcc_pon-supply = <&pon_perph_reg>;
 			qcom,play-mode = "direct";
+			qcom,pmic-revid = <&pmi8994_revid>;
 			qcom,wave-play-rate-us = <5263>;
 			qcom,actuator-type = "lra";
 			qcom,wave-shape = "square";
@@ -567,8 +570,6 @@
 			qcom,int-pwm-freq-khz = <505>;
 			qcom,en-brake;
 			qcom,brake-pattern = [03 03 00 00];
-			qcom,use-play-irq;
-			qcom,use-sc-irq;
 			qcom,wave-samples = [3e 3e 3e 3e 3e 3e 3e 3e];
 			qcom,wave-rep-cnt = <1>;
 			qcom,wave-samp-rep-cnt = <1>;

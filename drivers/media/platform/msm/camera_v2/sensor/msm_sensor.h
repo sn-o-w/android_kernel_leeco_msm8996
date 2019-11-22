@@ -88,6 +88,7 @@ struct msm_sensor_ctrl_t {
 	enum msm_camera_stream_type_t camera_stream_type;
 	uint32_t set_mclk_23880000;
 	uint8_t is_csid_tg_mode;
+	uint8_t bypass_video_node_creation;
 };
 
 #ifndef LETV_SINGLE_MODULE_VENDOR
