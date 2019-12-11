@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -312,15 +312,36 @@ static int64_t of_batterydata_convert_battery_id_kohm(int batt_id_uv,
 
 struct device_node *of_batterydata_get_best_profile(
 		const struct device_node *batterydata_container_node,
-		int batt_id_kohm, const char *batt_type)
+		const char *psy_name,  const char  *batt_type)
 {
 	struct batt_ids batt_ids;
 	struct device_node *node, *best_node = NULL;
+#ifdef CONFIG_VENDOR_LEECO
+	struct device_node *default_node = NULL;
+#endif
+	struct power_supply *psy;
 	const char *battery_type = NULL;
+	union power_supply_propval ret = {0, };
 	int delta = 0, best_delta = 0, best_id_kohm = 0, id_range_pct,
-		i = 0, rc = 0, limit = 0;
+		batt_id_kohm = 0, i = 0, rc = 0, limit = 0;
 	bool in_range = false;
 
+	psy = power_supply_get_by_name(psy_name);
+	if (!psy) {
+		pr_err("%s supply not found. defer\n", psy_name);
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	rc = psy->get_property(psy, POWER_SUPPLY_PROP_RESISTANCE_ID, &ret);
+	if (rc) {
+		pr_err("failed to retrieve resistance value rc=%d\n", rc);
+		return ERR_PTR(-ENOSYS);
+	}
+
+	batt_id_kohm = ret.intval / 1000;
+#ifdef CONFIG_VENDOR_LEECO
+	pr_info("battery_id_ohm : %d (kohm) \n", batt_id_kohm);
+#endif
 	/* read battery id range percentage for best profile */
 	rc = of_property_read_u32(batterydata_container_node,
 			"qcom,batt-id-range-pct", &id_range_pct);
@@ -333,7 +354,9 @@ struct device_node *of_batterydata_get_best_profile(
 			return ERR_PTR(-ENXIO);
 		}
 	}
-
+#ifdef CONFIG_VENDOR_LEECO
+	default_node = of_get_next_child(batterydata_container_node, NULL);
+#endif
 	/*
 	 * Find the battery data with a battery id resistor closest to this one
 	 */
@@ -371,6 +394,25 @@ struct device_node *of_batterydata_get_best_profile(
 		}
 	}
 
+#ifdef CONFIG_VENDOR_LEECO
+	if (best_node == NULL) {
+		if (default_node != NULL) {
+			best_node = default_node;
+			pr_info("No battery data found, use default battery data\n");
+		} else {
+			pr_err("No battery data found\n");
+			return best_node;
+		}
+	} else {
+		/* check that profile id is in range of the measured batt_id */
+		if (abs(best_id_kohm - batt_id_kohm) >
+				((best_id_kohm * id_range_pct) / 100)) {
+			pr_err("out of range: profile id %d batt id %d pct %d",
+				best_id_kohm, batt_id_kohm, id_range_pct);
+			return NULL;
+		}
+	}
+#else
 	if (best_node == NULL) {
 		pr_err("No battery data found\n");
 		return best_node;
@@ -383,6 +425,7 @@ struct device_node *of_batterydata_get_best_profile(
 			best_id_kohm, batt_id_kohm, id_range_pct);
 		return NULL;
 	}
+#endif
 
 	rc = of_property_read_string(best_node, "qcom,battery-type",
 							&battery_type);
@@ -419,6 +462,9 @@ int of_batterydata_read_data(struct device_node *batterydata_container_node,
 	/*
 	 * Find the battery data with a battery id resistor closest to this one
 	 */
+#ifdef CONFIG_VENDOR_LEECO
+	best_node = of_get_next_child(batterydata_container_node, NULL);
+#endif
 	for_each_child_of_node(batterydata_container_node, node) {
 		rc = of_batterydata_read_batt_id_kohm(node,
 						"qcom,batt-id-kohm",

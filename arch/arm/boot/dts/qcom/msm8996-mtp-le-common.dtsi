@@ -534,6 +534,7 @@
 };
 
 &pmi8994_charger {
+	qcom,battery-data = <&mtp_batterydata>;
 	qcom,dc-psy-type = "Wipower";
 	qcom,dcin-vadc = <&pmi8994_vadc>;
 	qcom,wipower-default-ilim-map = <4000000 20000000 550 700 300>;
@@ -548,6 +549,11 @@
 					<7820000 8500000 550 700 550>;
 };
 
+&pmi8994_fg {
+	qcom,battery-data = <&mtp_batterydata>;
+	qcom,ext-sense-type;
+};
+
 &i2c_7 {
 	smb1351-charger@1d {
 		compatible = "qcom,smb1351-charger";
@@ -556,20 +562,6 @@
 		qcom,float-voltage-mv = <4400>;
 		qcom,recharge-mv = <100>;
 	};
-};
-
-&pmi8994_fg {
-	qcom,battery-data = <&mtp_batterydata>;
-	qcom,ext-sense-type;
-	qcom,resume-soc = <99>;
-	qcom,low-batt-temp-comp;
-	qcom,fg-force-restart-enable;
-	qcom,fg-restore-batt-info;
-	qcom,fg-control-slope-limiter;
-	qcom,fg-reset-on-lockup;
-	qcom,fg-rconn-mohm = <30>;
-	qcom,use-otp-profile;
-	qcom,vbat-estimate-diff-mv = <300>;
 };
 
 &usb_otg_switch {
