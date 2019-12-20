@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -167,6 +167,7 @@ struct bms_dt_cfg {
 	int				cfg_low_voltage_calculate_soc_ms;
 	int				cfg_low_soc_fifo_length;
 	int				cfg_calculate_soc_ms;
+	int				cfg_voltage_soc_timeout_ms;
 	int				cfg_s1_sample_interval_ms;
 	int				cfg_s2_sample_interval_ms;
 	int				cfg_s1_sample_count;
@@ -254,6 +255,7 @@ struct qpnp_bms_chip {
 	struct bms_wakeup_source	vbms_soc_wake_source;
 	wait_queue_head_t		bms_wait_q;
 	struct delayed_work		monitor_soc_work;
+	struct delayed_work		voltage_soc_timeout_work;
 	struct mutex			bms_data_mutex;
 	struct mutex			bms_device_mutex;
 	struct mutex			last_soc_mutex;
@@ -1817,11 +1819,6 @@ static int setup_vbat_monitoring(struct qpnp_bms_chip *chip)
 {
 	int rc;
 
-	if (is_debug_batt_id(chip)) {
-		pr_debug("skip configuring vbat monitoring for debug_board\n");
-		return 0;
-	}
-
 	chip->vbat_monitor_params.low_thr =
 					chip->dt.cfg_low_voltage_threshold;
 	chip->vbat_monitor_params.high_thr =
@@ -2149,6 +2146,20 @@ static void monitor_soc_work(struct work_struct *work)
 	mutex_unlock(&chip->last_soc_mutex);
 
 	bms_relax(&chip->vbms_soc_wake_source);
+}
+
+static void voltage_soc_timeout_work(struct work_struct *work)
+{
+	struct qpnp_bms_chip *chip = container_of(work,
+				struct qpnp_bms_chip,
+				voltage_soc_timeout_work.work);
+
+	mutex_lock(&chip->bms_device_mutex);
+	if (!chip->bms_dev_open) {
+		pr_warn("BMS device not opened, using voltage based SOC\n");
+		chip->dt.cfg_use_voltage_soc = true;
+	}
+	mutex_unlock(&chip->bms_device_mutex);
 }
 
 static int get_prop_bms_capacity(struct qpnp_bms_chip *chip)
@@ -3314,6 +3325,7 @@ static int show_bms_config(struct seq_file *m, void *data)
 			"low_voltage_threshold\t=\t%d\n"
 			"low_voltage_calculate_soc_ms\t=\t%d\n"
 			"calculate_soc_ms\t=\t%d\n"
+			"voltage_soc_timeout_ms\t=\t%d\n"
 			"ignore_shutdown_soc\t=\t%d\n"
 			"shutdown_soc_valid_limit\t=\t%d\n"
 			"force_s3_on_suspend\t=\t%d\n"
@@ -3335,6 +3347,7 @@ static int show_bms_config(struct seq_file *m, void *data)
 			chip->dt.cfg_low_voltage_threshold,
 			chip->dt.cfg_low_voltage_calculate_soc_ms,
 			chip->dt.cfg_calculate_soc_ms,
+			chip->dt.cfg_voltage_soc_timeout_ms,
 			chip->dt.cfg_ignore_shutdown_soc,
 			chip->dt.cfg_shutdown_soc_valid_limit,
 			chip->dt.cfg_force_s3_on_suspend,
@@ -3639,6 +3652,8 @@ static int parse_bms_dt_properties(struct qpnp_bms_chip *chip)
 			"low-voltage-calculate-soc-ms", rc);
 	SPMI_PROP_READ(cfg_calculate_soc_ms, "calculate-soc-ms", rc);
 	SPMI_PROP_READ(cfg_low_voltage_threshold, "low-voltage-threshold", rc);
+	SPMI_PROP_READ(cfg_voltage_soc_timeout_ms,
+			"volatge-soc-timeout-ms", rc);
 
 	if (rc) {
 		pr_err("Missing required properties rc=%d\n", rc);
@@ -3965,6 +3980,16 @@ static int qpnp_vm_bms_probe(struct spmi_device *spmi)
 		if (!ent)
 			pr_err("Couldn't create bms_status debug file\n");
 	}
+
+	schedule_delayed_work(&chip->monitor_soc_work, 0);
+
+	/*
+	 * schedule a work to check if the userspace vmbms module
+	 * has registered. Fall-back to voltage-based-soc reporting
+	 * if it has not.
+	 */
+	schedule_delayed_work(&chip->voltage_soc_timeout_work,
+		msecs_to_jiffies(chip->dt.cfg_voltage_soc_timeout_ms));
 
 	pr_info("probe success: soc=%d vbatt=%d ocv=%d warm_reset=%d\n",
 					get_prop_bms_capacity(chip), vbatt,

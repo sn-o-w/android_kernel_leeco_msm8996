@@ -327,10 +327,8 @@
 };
 
 &usb3 {
-	extcon = <&pmi8994_charger>;
 	qcom,vbus_set_by_cclogic;
-	qcom,no-wakeup-src-in-hostmode;
-	qcom,check-for-float;
+    qcom,no-wakeup-src-in-hostmode;
 };
 
 &spi_0_active {

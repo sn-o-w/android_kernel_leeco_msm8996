@@ -85,24 +85,10 @@ static inline void __raw_rm_writeq(u64 val, volatile void __iomem *paddr)
 		: : "r" (val), "r" (paddr) : "memory");
 }
 
-static inline bool pnv_pci_is_m64(struct pnv_phb *phb, struct resource *r)
+static inline bool pnv_pci_is_mem_pref_64(unsigned long flags)
 {
-	/*
-	 * WARNING: We cannot rely on the resource flags. The Linux PCI
-	 * allocation code sometimes decides to put a 64-bit prefetchable
-	 * BAR in the 32-bit window, so we have to compare the addresses.
-	 *
-	 * For simplicity we only test resource start.
-	 */
-	return (r->start >= phb->ioda.m64_base &&
-		r->start < (phb->ioda.m64_base + phb->ioda.m64_size));
-}
-
-static inline bool pnv_pci_is_m64_flags(unsigned long resource_flags)
-{
-	unsigned long flags = (IORESOURCE_MEM_64 | IORESOURCE_PREFETCH);
-
-	return (resource_flags & flags) == flags;
+	return ((flags & (IORESOURCE_MEM_64 | IORESOURCE_PREFETCH)) ==
+		(IORESOURCE_MEM_64 | IORESOURCE_PREFETCH));
 }
 
 static int pnv_ioda_alloc_pe(struct pnv_phb *phb)
@@ -1780,12 +1766,9 @@ static resource_size_t pnv_pci_window_alignment(struct pci_bus *bus,
 		bridge = bridge->bus->self;
 	}
 
-	/*
-	 * We fall back to M32 if M64 isn't supported. We enforce the M64
-	 * alignment for any 64-bit resource, PCIe doesn't care and
-	 * bridges only do 64-bit prefetchable anyway.
-	 */
-	if (phb->ioda.m64_segsize && pnv_pci_is_m64_flags(type))
+	/* We fail back to M32 if M64 isn't supported */
+	if (phb->ioda.m64_segsize &&
+	    pnv_pci_is_mem_pref_64(type))
 		return phb->ioda.m64_segsize;
 	if (type & IORESOURCE_MEM)
 		return phb->ioda.m32_segsize;
