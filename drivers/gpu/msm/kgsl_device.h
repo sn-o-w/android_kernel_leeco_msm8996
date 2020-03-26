@@ -63,6 +63,8 @@ enum kgsl_event_results {
 	KGSL_EVENT_CANCELLED = 2,
 };
 
+#define KGSL_FLAG_WAKE_ON_TOUCH BIT(0)
+
 /*
  * "list" of event types for ftrace symbolic magic
  */
@@ -88,8 +90,7 @@ enum kgsl_event_results {
 	{ KGSL_CONTEXT_TYPE_GL, "GL" }, \
 	{ KGSL_CONTEXT_TYPE_CL, "CL" }, \
 	{ KGSL_CONTEXT_TYPE_C2D, "C2D" }, \
-	{ KGSL_CONTEXT_TYPE_RS, "RS" }, \
-	{ KGSL_CONTEXT_TYPE_VK, "VK" }
+	{ KGSL_CONTEXT_TYPE_RS, "RS" }
 
 #define KGSL_CONTEXT_ID(_context) \
 	((_context != NULL) ? (_context)->id : KGSL_MEMSTORE_GLOBAL)

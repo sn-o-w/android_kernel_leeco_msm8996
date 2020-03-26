@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -668,13 +668,9 @@ static int smb2_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
 	case POWER_SUPPLY_PROP_TEMP:
 		rc = smblib_get_prop_from_bms(chg, psp, val);
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		rc = smblib_get_prop_from_bms(chg, psp, val);
-		if (!rc)
-			val->intval *= (-1);
 		break;
 	default:
 		pr_err("batt power supply prop %d not supported\n", psp);
@@ -1176,15 +1172,11 @@ static int smb2_init_hw(struct smb2 *chip)
 
 	/*
 	 * AICL configuration:
-	 * start from min, AICL rerun enable and AICL ADC disable
+	 * start from min and AICL ADC disable
 	 */
 	rc = smblib_masked_write(chg, USBIN_AICL_OPTIONS_CFG_REG,
-			SUSPEND_ON_COLLAPSE_USBIN_BIT
-			| USBIN_AICL_START_AT_MAX_BIT
-			| USBIN_AICL_ADC_EN_BIT
-			| USBIN_AICL_RERUN_EN_BIT
-			| USBIN_AICL_HDC_EN_BIT,
-			USBIN_AICL_RERUN_EN_BIT);
+			USBIN_AICL_START_AT_MAX_BIT
+				| USBIN_AICL_ADC_EN_BIT, 0);
 	if (rc < 0) {
 		dev_err(chg->dev, "Couldn't configure AICL rc=%d\n", rc);
 		return rc;
@@ -1256,18 +1248,6 @@ static int smb2_init_hw(struct smb2 *chip)
 	if (rc < 0) {
 		dev_err(chg->dev,
 			"Couldn't disable h/w autonomous parallel control rc=%d\n",
-			rc);
-		return rc;
-	}
-
-	/*
-	 * allow DRP.DFP time to exceed by tPDdebounce time.
-	 */
-	rc = smblib_masked_write(chg, TAPER_TIMER_SEL_CFG_REG,
-				TYPEC_DRP_DFP_TIME_CFG_BIT,
-				TYPEC_DRP_DFP_TIME_CFG_BIT);
-	if (rc < 0) {
-		dev_err(chg->dev, "Couldn't configure DRP.DFP time rc=%d\n",
 			rc);
 		return rc;
 	}
@@ -1681,7 +1661,6 @@ static struct smb_irq_info smb2_irqs[] = {
 	[SWITCH_POWER_OK_IRQ] = {
 		.name		= "switcher-power-ok",
 		.handler	= smblib_handle_switcher_power_ok,
-		.wake		= true,
 		.storm_data	= {true, 1000, 8},
 		.flags		= IRQ_TYPE_EDGE_BOTH,
 	},

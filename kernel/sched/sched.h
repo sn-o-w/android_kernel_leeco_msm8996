@@ -117,6 +117,11 @@ static inline int task_has_dl_policy(struct task_struct *p)
 	return dl_policy(p->policy);
 }
 
+static inline bool dl_time_before(u64 a, u64 b)
+{
+	return (s64)(a - b) < 0;
+}
+
 /*
  * Tells if entity @a should preempt entity @b.
  */
@@ -391,6 +396,7 @@ struct migration_sum_data {
 };
 
 extern struct list_head cluster_head;
+extern int num_clusters;
 extern struct sched_cluster *sched_cluster[NR_CPUS];
 extern int group_will_fit(struct sched_cluster *cluster,
 		 struct related_thread_group *grp, u64 demand);
@@ -1703,9 +1709,9 @@ static const u32 prio_to_wmult[40] = {
 #define ENQUEUE_HEAD		0x08
 #define ENQUEUE_REPLENISH	0x10
 #ifdef CONFIG_SMP
-#define ENQUEUE_MIGRATED	0x20
+#define ENQUEUE_WAKING		0x20
 #else
-#define ENQUEUE_MIGRATED	0x00
+#define ENQUEUE_WAKING		0x00
 #endif
 #define ENQUEUE_MIGRATING	0x40
 
@@ -1738,6 +1744,7 @@ struct sched_class {
 	void (*migrate_task_rq)(struct task_struct *p, int next_cpu);
 
 	void (*post_schedule) (struct rq *this_rq);
+	void (*task_waking) (struct task_struct *task);
 	void (*task_woken) (struct rq *this_rq, struct task_struct *task);
 
 	void (*set_cpus_allowed)(struct task_struct *p,
@@ -2207,10 +2214,4 @@ static inline u64 irq_time_read(int cpu)
 }
 #endif /* CONFIG_64BIT */
 #endif /* CONFIG_IRQ_TIME_ACCOUNTING */
-
-/*
- * task_may_not_preempt - check whether a task may not be preemptible soon
- */
-extern bool task_may_not_preempt(struct task_struct *task, int cpu);
-
 #endif /* CONFIG_SCHED_QHMP */

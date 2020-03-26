@@ -98,12 +98,6 @@ static inline void put_binfmt(struct linux_binfmt * fmt)
 	module_put(fmt->module);
 }
 
-bool path_noexec(const struct path *path)
-{
-	return (path->mnt->mnt_flags & MNT_NOEXEC) ||
-	       (path->mnt->mnt_sb->s_iflags & SB_I_NOEXEC);
-}
-
 #ifdef CONFIG_USELIB
 /*
  * Note that a shared library must be both readable and executable due to
@@ -138,7 +132,7 @@ SYSCALL_DEFINE1(uselib, const char __user *, library)
 		goto exit;
 
 	error = -EACCES;
-	if (path_noexec(&file->f_path))
+	if (file->f_path.mnt->mnt_flags & MNT_NOEXEC)
 		goto exit;
 
 	fsnotify_open(file);
@@ -796,7 +790,7 @@ static struct file *do_open_exec(struct filename *name)
 	if (!S_ISREG(file_inode(file)->i_mode))
 		goto exit;
 
-	if (path_noexec(&file->f_path))
+	if (file->f_path.mnt->mnt_flags & MNT_NOEXEC)
 		goto exit;
 
 	fsnotify_open(file);
@@ -1057,15 +1051,14 @@ killed:
 	return -EAGAIN;
 }
 
-char *get_task_comm(char *buf, struct task_struct *tsk)
+char *__get_task_comm(char *buf, size_t buf_size, struct task_struct *tsk)
 {
-	/* buf must be at least sizeof(tsk->comm) in size */
 	task_lock(tsk);
-	strncpy(buf, tsk->comm, sizeof(tsk->comm));
+	strncpy(buf, tsk->comm, buf_size);
 	task_unlock(tsk);
 	return buf;
 }
-EXPORT_SYMBOL_GPL(get_task_comm);
+EXPORT_SYMBOL_GPL(__get_task_comm);
 
 /*
  * These functions flushes out all traces of the currently running executable
@@ -1491,7 +1484,6 @@ static int do_execve_common(struct filename *filename,
 	struct file *file;
 	struct files_struct *displaced;
 	int retval;
-	bool is_su;
 
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
@@ -1567,17 +1559,9 @@ static int do_execve_common(struct filename *filename,
 	if (retval < 0)
 		goto out;
 
-	/* exec_binprm can release file and it may be freed */
-	is_su = d_is_su(file->f_dentry);
-
 	retval = exec_binprm(bprm);
 	if (retval < 0)
 		goto out;
-
-	if (is_su && capable(CAP_SYS_ADMIN)) {
-		current->flags |= PF_SU;
-		su_exec();
-	}
 
 	/* execve succeeded */
 	current->fs->in_exec = 0;

@@ -198,15 +198,11 @@ static unsigned long highmem_dirtyable_memory(unsigned long total)
 #ifdef CONFIG_HIGHMEM
 	int node;
 	unsigned long x = 0;
-	int i;
 
 	for_each_node_state(node, N_HIGH_MEMORY) {
-		for (i = 0; i < MAX_NR_ZONES; i++) {
-			struct zone *z = &NODE_DATA(node)->node_zones[i];
+		struct zone *z = &NODE_DATA(node)->node_zones[ZONE_HIGHMEM];
 
-			if (is_highmem(z))
-				x += zone_dirtyable_memory(z);
-		}
+		x += zone_dirtyable_memory(z);
 	}
 	/*
 	 * Unreclaimable memory (kernel memory or anonymous memory
@@ -971,7 +967,6 @@ static void bdi_update_dirty_ratelimit(struct backing_dev_info *bdi,
 	unsigned long pos_ratio;
 	unsigned long step;
 	unsigned long x;
-	unsigned long shift;
 
 	/*
 	 * The dirty rate will match the writeout rate in long term, except
@@ -1099,11 +1094,11 @@ static void bdi_update_dirty_ratelimit(struct backing_dev_info *bdi,
 	 * rate itself is constantly fluctuating. So decrease the track speed
 	 * when it gets close to the target. Helps eliminate pointless tremors.
 	 */
-	shift = dirty_ratelimit / (2 * step + 1);
-	if (shift < BITS_PER_LONG)
-		step = DIV_ROUND_UP(step >> shift, 8);
-	else
-		step = 0;
+	step >>= dirty_ratelimit / (2 * step + 1);
+	/*
+	 * Limit the tracking speed to avoid overshooting.
+	 */
+	step = (step + 7) / 8;
 
 	if (dirty_ratelimit < balanced_dirty_ratelimit)
 		dirty_ratelimit += step;

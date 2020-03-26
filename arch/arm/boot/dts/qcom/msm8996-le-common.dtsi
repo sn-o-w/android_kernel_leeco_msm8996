@@ -27,9 +27,10 @@
 
 	reserved-memory {
 		ramoops_mem: ramoops_region@91500000 {
-			compatible = "removed-dma-pool";
+			compatible = "shared-dma-pool";
 			no-map;
-			reg = <0x0 0x91500000 0x0 0x00100000>;
+			reg = <0 0x91500000 0 0x00100000>;
+			label = "ramoops_mem";
 		};
 	};
 
@@ -64,7 +65,6 @@
 	ramoops {
 		compatible = "ramoops";
 		status = "ok";
-
 		android,ramoops-buffer-start = <0x91500000>;
 		android,ramoops-buffer-size =  <0x100000>;
 		android,ramoops-console-size = <0x60000>;
@@ -72,7 +72,7 @@
 		android,ramoops-ftrace-size = <0x10000>;
 		android,ramoops-pmsg-size = <0x20000>;
 		android,ramoops-dump-oops = <0x1>;
-		linux,contiguous-region = <&ramoops_mem>;
+		memory-region = <&ramoops_mem>;
 	};
 
 	i2c_9: i2c@75b7000 { /* BLSP2 QUP2 */
@@ -327,10 +327,8 @@
 };
 
 &usb3 {
-	extcon = <&pmi8994_charger>;
 	qcom,vbus_set_by_cclogic;
-	qcom,no-wakeup-src-in-hostmode;
-	qcom,check-for-float;
+    qcom,no-wakeup-src-in-hostmode;
 };
 
 &spi_0_active {

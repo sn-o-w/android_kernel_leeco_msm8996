@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -207,7 +207,6 @@ static enum power_supply_property msm_batt_power_props[] = {
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
-	POWER_SUPPLY_PROP_DEBUG_BATTERY,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_COOL_TEMP,
 	POWER_SUPPLY_PROP_WARM_TEMP,
@@ -392,7 +391,6 @@ struct qpnp_lbc_chip {
 	struct qpnp_adc_tm_chip		*adc_tm_dev;
 	struct led_classdev		led_cdev;
 	struct dentry			*debug_root;
-	struct work_struct		debug_board_work;
 
 	/* parallel-chg params */
 	struct power_supply		parallel_psy;
@@ -1564,22 +1562,6 @@ mutex_unlock:
 	return rc;
 }
 
-static void qpnp_lbc_debug_board_work_fn(struct work_struct *work)
-{
-	struct qpnp_lbc_chip *chip = container_of(work, struct qpnp_lbc_chip,
-						debug_board_work);
-	int rc = 0;
-
-	if (chip->adc_param.channel == LR_MUX1_BATT_THERM
-					&& chip->debug_board) {
-		pr_debug("Disable adc-tm notifications for debug board\n");
-		rc = qpnp_adc_tm_disable_chan_meas(chip->adc_tm_dev,
-							 &chip->adc_param);
-		if (rc < 0)
-			pr_err("failed to disable tm %d\n", rc);
-	}
-}
-
 static int qpnp_batt_property_is_writeable(struct power_supply *psy,
 					enum power_supply_property psp)
 {
@@ -1697,12 +1679,6 @@ static int qpnp_batt_power_set_property(struct power_supply *psy,
 		if (rc)
 			pr_err("Failed to disable charging rc=%d\n", rc);
 		break;
-	case POWER_SUPPLY_PROP_DEBUG_BATTERY:
-		chip->debug_board = val->intval;
-		schedule_work(&chip->debug_board_work);
-		rc = qpnp_lbc_charger_enable(chip, DEBUG_BOARD,
-						!(val->intval));
-		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MIN:
 		qpnp_lbc_vinmin_set(chip, val->intval / 1000);
 		break;
@@ -1766,9 +1742,6 @@ static int qpnp_batt_power_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		val->intval = !(chip->cfg_charging_disabled);
-		break;
-	case POWER_SUPPLY_PROP_DEBUG_BATTERY:
-		val->intval = chip->debug_board;
 		break;
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
 		val->intval = chip->therm_lvl_sel;
@@ -2406,7 +2379,7 @@ static int qpnp_charger_read_dt_props(struct qpnp_lbc_chip *chip)
 					"qcom,collapsible-chgr-support");
 
 	/* Disable charging when faking battery values */
-	if (chip->cfg_use_fake_battery || chip->debug_board)
+	if (chip->cfg_use_fake_battery)
 		chip->cfg_charging_disabled = true;
 
 	chip->cfg_use_external_charger = of_property_read_bool(
@@ -2593,9 +2566,6 @@ static irqreturn_t qpnp_lbc_batt_pres_irq_handler(int irq, void *_chip)
 {
 	struct qpnp_lbc_chip *chip = _chip;
 	int batt_present;
-
-	if (chip->debug_board)
-		return IRQ_HANDLED;
 
 	batt_present = qpnp_lbc_is_batt_present(chip);
 	pr_debug("batt-pres triggered: %d\n", batt_present);
@@ -3241,7 +3211,7 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 	alarm_init(&chip->vddtrim_alarm, ALARM_REALTIME, vddtrim_callback);
 	INIT_DELAYED_WORK(&chip->collapsible_detection_work,
 			qpnp_lbc_collapsible_detection_work);
-	INIT_WORK(&chip->debug_board_work, qpnp_lbc_debug_board_work_fn);
+
 	/* Get all device-tree properties */
 	rc = qpnp_charger_read_dt_props(chip);
 	if (rc) {
@@ -3426,7 +3396,6 @@ static int qpnp_lbc_remove(struct spmi_device *spmi)
 		alarm_cancel(&chip->vddtrim_alarm);
 		cancel_work_sync(&chip->vddtrim_work);
 	}
-	cancel_work_sync(&chip->debug_board_work);
 	cancel_delayed_work_sync(&chip->collapsible_detection_work);
 	debugfs_remove_recursive(chip->debug_root);
 	if (chip->bat_if_base)

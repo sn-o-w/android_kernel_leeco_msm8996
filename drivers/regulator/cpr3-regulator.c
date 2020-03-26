@@ -2921,7 +2921,7 @@ static int _cpr3_regulator_update_ctrl_state(struct cpr3_controller *ctrl)
 	struct cpr4_sdelta *sdelta;
 	bool valid = false;
 	bool thread_valid;
-	int i, j, rc, new_volt, vdd_volt, dynamic_floor_volt, last_corner_volt = 0;
+	int i, j, rc, new_volt, vdd_volt, dynamic_floor_volt, last_corner_volt;
 	u32 reg_last_measurement = 0, sdelta_size;
 	int *sdelta_table, *boost_table;
 
@@ -3324,8 +3324,8 @@ static int cpr3_regulator_measure_aging(struct cpr3_controller *ctrl,
 {
 	u32 mask, reg, result, quot_min, quot_max, sel_min, sel_max;
 	u32 quot_min_scaled, quot_max_scaled;
-	u32 gcnt, gcnt_ref, gcnt0_restore = 0, gcnt1_restore = 0, irq_restore = 0;
-	u32 cont_dly_restore = 0, up_down_dly_restore = 0;
+	u32 gcnt, gcnt_ref, gcnt0_restore, gcnt1_restore, irq_restore;
+	u32 cont_dly_restore, up_down_dly_restore;
 	int quot_delta, quot_delta_scaled, quot_delta_scaled_sum;
 	int *quot_delta_results;
 	int rc, rc2, i, aging_measurement_count, filtered_count;
@@ -3523,8 +3523,7 @@ cleanup:
 	cpr3_write(ctrl, CPR3_REG_GCNT(1), gcnt1_restore);
 
 	if (ctrl->supports_hw_closed_loop
-		&& ctrl->ctrl_type == CPR_CTRL_TYPE_CPR3
-		&& up_down_dly_restore) {
+		&& ctrl->ctrl_type == CPR_CTRL_TYPE_CPR3) {
 		cpr3_write(ctrl, CPR3_REG_CPR_TIMER_MID_CONT, cont_dly_restore);
 		cpr3_write(ctrl, CPR3_REG_CPR_TIMER_UP_DN_CONT,
 				up_down_dly_restore);
@@ -3684,7 +3683,7 @@ static int cpr3_regulator_aging_adjust(struct cpr3_controller *ctrl)
 	struct cpr3_corner *corner;
 	int *restore_current_corner;
 	bool *restore_vreg_enabled;
-	int i, j, id, rc, rc2, vreg_count, aging_volt, max_aging_volt = 0;
+	int i, j, id, rc, rc2, vreg_count, aging_volt, max_aging_volt;
 	u32 reg;
 
 	if (!ctrl->aging_required || !ctrl->cpr_enabled
@@ -3767,6 +3766,7 @@ static int cpr3_regulator_aging_adjust(struct cpr3_controller *ctrl)
 	}
 
 	/* Perform aging measurement on all aging sensors */
+	max_aging_volt = 0;
 	for (i = 0; i < ctrl->aging_sensor_count; i++) {
 		for (j = 0; j < CPR3_AGING_RETRY_COUNT; j++) {
 			rc = cpr3_regulator_measure_aging(ctrl,
@@ -4144,82 +4144,6 @@ static struct regulator_ops cpr3_regulator_ops = {
 	.list_voltage		= cpr3_regulator_list_voltage,
 	.list_corner_voltage	= cpr3_regulator_list_corner_voltage,
 };
-
-#ifdef CONFIG_REGULATOR_CPR3_VOLTAGE_CONTROL
-int cpr_regulator_get_ceiling_voltage(struct regulator *regulator,
-		int cori)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count)
-		return cpr_vreg->corner[cori].ceiling_volt;
-
-	return -EINVAL;
-}
-int cpr_regulator_get_floor_voltage(struct regulator *regulator,
-		int cori)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count)
-		return cpr_vreg->corner[cori].floor_volt;
-
-	return -EINVAL;
-}
-int cpr_regulator_get_last_voltage(struct regulator *regulator,
-		int cori)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count)
-		return cpr_vreg->corner[cori].last_volt;
-
-	return -EINVAL;
-}
-
-int cpr_regulator_set_ceiling_voltage(struct regulator *regulator,
-		int cori, int volt)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count) {
-		mutex_lock(&cpr_vreg->thread->ctrl->lock);
-		cpr_vreg->corner[cori].ceiling_volt = volt;
-		mutex_unlock(&cpr_vreg->thread->ctrl->lock);
-		return 0;
-	}
-
-	return -EINVAL;
-}
-int cpr_regulator_set_floor_voltage(struct regulator *regulator,
-		int cori, int volt)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count) {
-		mutex_lock(&cpr_vreg->thread->ctrl->lock);
-		cpr_vreg->corner[cori].floor_volt = volt;
-		mutex_unlock(&cpr_vreg->thread->ctrl->lock);
-		return 0;
-	}
-
-	return -EINVAL;
-}
-int cpr_regulator_set_last_voltage(struct regulator *regulator,
-		int cori, int volt)
-{
-	struct cpr3_regulator *cpr_vreg = regulator_get_drvdata(regulator);
-	cori--;
-	if (cori >= 0 && cori < cpr_vreg->corner_count) {
-		mutex_lock(&cpr_vreg->thread->ctrl->lock);
-		cpr_vreg->corner[cori].last_volt = volt;
-		mutex_unlock(&cpr_vreg->thread->ctrl->lock);
-		return 0;
-	}
-
-	return -EINVAL;
-}
-#endif
 
 /**
  * cprh_regulator_get_voltage() - get the voltage corner for the CPR3 regulator

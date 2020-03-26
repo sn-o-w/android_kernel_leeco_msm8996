@@ -519,12 +519,6 @@ static void msm_gpio_dbg_show_one(struct seq_file *s,
 	};
 
 	g = &pctrl->soc->groups[offset];
-
-	if (pctrl->pctrl->desc->pins[offset].no_read) {
-		seq_printf(s, "%s not readable", g->name);
-		return;
-	}
-
 	ctl_reg = readl(pctrl->regs + g->ctl_reg);
 
 	is_out = !!(ctl_reg & BIT(g->oe_bit));
@@ -796,7 +790,6 @@ static int msm_gpio_irq_set_wake(struct irq_data *d, unsigned int on)
 
 static struct irq_chip msm_gpio_irq_chip = {
 	.name           = "msmgpio",
-	.flags          = IRQCHIP_MASK_ON_SUSPEND,
 	.irq_mask       = msm_gpio_irq_mask,
 	.irq_unmask     = msm_gpio_irq_unmask,
 	.irq_ack        = msm_gpio_irq_ack,
@@ -827,8 +820,7 @@ bool msm_gpio_irq_handler(unsigned int irq, struct irq_desc *desc)
 		val = readl(pctrl->regs + g->intr_status_reg);
 		if (val & BIT(g->intr_status_bit)) {
 			irq_pin = irq_find_mapping(gc->irqdomain, i);
-			generic_handle_irq(irq_pin);
-			handled++;
+			handled += generic_handle_irq(irq_pin);
 		}
 	}
 

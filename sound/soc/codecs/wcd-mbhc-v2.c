@@ -803,10 +803,6 @@ static bool wcd_mbhc_detect_anc_plug_type(struct wcd_mbhc *mbhc)
 	if (!mbhc->mbhc_cb->mbhc_micbias_control)
 		return false;
 
-	// Fail when reg WCD_MBHC_FSM_EN is not valid
-	if (!mbhc->wcd_mbhc_regs[WCD_MBHC_FSM_EN].reg)
-		return false;
-
 	WCD_MBHC_REG_READ(WCD_MBHC_FSM_EN, val);
 
 	if (val)
@@ -839,8 +835,7 @@ static bool wcd_mbhc_detect_anc_plug_type(struct wcd_mbhc *mbhc)
 		pr_debug("%s: Retry attempt %lu\n", __func__, retry + 1);
 		WCD_MBHC_REG_READ(WCD_MBHC_HS_COMP_RESULT, hs_comp_res);
 
-		if (!hs_comp_res &&
-			mbhc->wcd_mbhc_regs[WCD_MBHC_HS_COMP_RESULT].reg) {
+		if (!hs_comp_res) {
 			valid_plug_cnt++;
 			is_check_btn_press = true;
 		} else
@@ -2088,7 +2083,7 @@ static void wcd_btn_lpress_fn(struct work_struct *work)
 {
 	struct delayed_work *dwork;
 	struct wcd_mbhc *mbhc;
-	s16 btn_result = 0;
+	s16 btn_result;
 
 	pr_debug("%s: Enter\n", __func__);
 

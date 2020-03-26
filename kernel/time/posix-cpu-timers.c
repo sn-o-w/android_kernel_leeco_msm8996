@@ -103,7 +103,7 @@ static void bump_cpu_timer(struct k_itimer *timer,
 			continue;
 
 		timer->it.cpu.expires += incr;
-		timer->it_overrun += 1 << i;
+		timer->it_overrun += 1LL << i;
 		delta -= incr;
 	}
 }
@@ -1203,12 +1203,11 @@ void set_process_cpu_timer(struct task_struct *tsk, unsigned int clock_idx,
 			   cputime_t *newval, cputime_t *oldval)
 {
 	unsigned long long now;
-        int ret;
 
 	WARN_ON_ONCE(clock_idx == CPUCLOCK_SCHED);
-	ret = cpu_timer_sample_group(clock_idx, tsk, &now);
+	cpu_timer_sample_group(clock_idx, tsk, &now);
 
-	if (!ret && oldval) {
+	if (oldval) {
 		/*
 		 * We are setting itimer. The *oldval is absolute and we update
 		 * it to be relative, *newval argument is relative and we update

@@ -10,7 +10,6 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/sort.h>
 #include "fg-core.h"
 
 void fg_circ_buf_add(struct fg_circ_buf *buf, int val)
@@ -37,39 +36,6 @@ int fg_circ_buf_avg(struct fg_circ_buf *buf, int *avg)
 		result += buf->arr[i];
 
 	*avg = div_s64(result, buf->size);
-	return 0;
-}
-
-static int cmp_int(const void *a, const void *b)
-{
-	return *(int *)a - *(int *)b;
-}
-
-int fg_circ_buf_median(struct fg_circ_buf *buf, int *median)
-{
-	int *temp;
-
-	if (buf->size == 0)
-		return -ENODATA;
-
-	if (buf->size == 1) {
-		*median = buf->arr[0];
-		return 0;
-	}
-
-	temp = kmalloc_array(buf->size, sizeof(*temp), GFP_KERNEL);
-	if (!temp)
-		return -ENOMEM;
-
-	memcpy(temp, buf->arr, buf->size * sizeof(*temp));
-	sort(temp, buf->size, sizeof(*temp), cmp_int, NULL);
-
-	if (buf->size % 2)
-		*median = temp[buf->size / 2];
-	else
-		*median = (temp[buf->size / 2 - 1] + temp[buf->size / 2]) / 2;
-
-	kfree(temp);
 	return 0;
 }
 
@@ -470,7 +436,7 @@ int fg_masked_write(struct fg_chip *chip, int addr, u8 mask, u8 val)
 	reg &= ~mask;
 	reg |= val & mask;
 
-	sec_access = (addr & 0x00FF) > 0xB8;
+	sec_access = (addr & 0x00FF) > 0xD0;
 	if (sec_access) {
 		rc = spmi_ext_register_writel(spmi->ctrl, spmi->sid,
 				(addr & 0xFF00) | 0xD0, &sec_addr_val, 1);
