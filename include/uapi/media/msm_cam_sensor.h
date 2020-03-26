@@ -388,6 +388,9 @@ struct reg_settings_ois_t {
 	uint32_t reg_data;
 	enum msm_camera_i2c_data_type data_type;
 	enum msm_ois_i2c_operation i2c_operation;
+#define OIS_REG_DATA_SEQ_MAX 128
+    unsigned char reg_data_seq[OIS_REG_DATA_SEQ_MAX];
+    uint32_t reg_data_seq_size;
 	uint32_t delay;
 };
 

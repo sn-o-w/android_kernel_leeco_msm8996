@@ -30,8 +30,13 @@
 #include <trace/events/power.h>
 #include <linux/compiler.h>
 #include <linux/wakeup_reason.h>
+#include <linux/cpufreq.h>
 
 #include "power.h"
+#include <linux/gpio.h>
+
+extern int slst_gpio_base_id;
+#define PROC_AWAKE_ID 12 /* 12th bit */
 
 const char *pm_labels[] = { "mem", "standby", "freeze", NULL };
 const char *pm_states[PM_SUSPEND_MAX];
@@ -42,6 +47,8 @@ static DECLARE_WAIT_QUEUE_HEAD(suspend_freeze_wait_head);
 
 enum freeze_state __read_mostly suspend_freeze_state;
 static DEFINE_SPINLOCK(suspend_freeze_lock);
+
+extern void thaw_fingerprintd(void);
 
 void freeze_set_ops(const struct platform_freeze_ops *ops)
 {
@@ -391,6 +398,7 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 
  Platform_wake:
 	platform_resume_noirq(state);
+	thaw_fingerprintd();
 	dpm_resume_noirq(PMSG_RESUME);
 
  Platform_early_resume:
@@ -461,6 +469,7 @@ int suspend_devices_and_enter(suspend_state_t state)
  */
 static void suspend_finish(void)
 {
+	msm_do_pm_boost(true);
 	suspend_thaw_processes();
 	pm_notifier_call_chain(PM_POST_SUSPEND);
 	pm_restore_console();
@@ -496,11 +505,13 @@ static int enter_state(suspend_state_t state)
 	if (state == PM_SUSPEND_FREEZE)
 		freeze_begin();
 
+#ifndef CONFIG_SUSPEND_SKIP_SYNC
 	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
 	printk(KERN_INFO "PM: Syncing filesystems ... ");
 	sys_sync();
 	printk("done.\n");
 	trace_suspend_resume(TPS("sync_filesystems"), 0, false);
+#endif
 
 	pr_debug("PM: Preparing system for %s sleep\n", pm_states[state]);
 	error = suspend_prepare(state);
@@ -551,7 +562,13 @@ int pm_suspend(suspend_state_t state)
 		return -EINVAL;
 
 	pm_suspend_marker("entry");
+
+	gpio_set_value(slst_gpio_base_id + PROC_AWAKE_ID, 0);
+
 	error = enter_state(state);
+
+	gpio_set_value(slst_gpio_base_id + PROC_AWAKE_ID, 1);
+
 	if (error) {
 		suspend_stats.fail++;
 		dpm_save_failed_errno(error);

@@ -20,10 +20,10 @@
 #include <trace/events/power.h>
 #include <linux/wakeup_reason.h>
 
-/* 
+/*
  * Timeout for stopping processes
  */
-unsigned int __read_mostly freeze_timeout_msecs = 20 * MSEC_PER_SEC;
+unsigned int __read_mostly freeze_timeout_msecs = 2 * MSEC_PER_SEC;
 
 static int try_to_freeze_tasks(bool user_only)
 {
@@ -219,6 +219,29 @@ int freeze_kernel_threads(void)
 	if (error)
 		thaw_kernel_threads();
 	return error;
+}
+
+void thaw_fingerprintd(void)
+{
+    struct task_struct *g, *p;
+    struct task_struct *curr = current;
+
+    pm_freezing = false;
+    pm_nosig_freezing = false;
+
+    read_lock(&tasklist_lock);
+    for_each_process_thread(g, p) {
+    /* No other threads should have PF_SUSPEND_TASK set */
+        WARN_ON((p != curr) && (p->flags & PF_SUSPEND_TASK));
+        if(!memcmp(p->comm, "fps_work", 9)) {
+            __thaw_task(p);
+            goto done;
+        }
+    }
+done:
+    read_unlock(&tasklist_lock);
+    pm_freezing = true;
+    pm_nosig_freezing = true;
 }
 
 void thaw_processes(void)

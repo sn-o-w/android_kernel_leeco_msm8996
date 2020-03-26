@@ -23,7 +23,7 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/suspend.h>
-#include <linux/clk.h>
+#include <linux/clk/msm-clk-provider.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
@@ -36,6 +36,13 @@ static struct clk *l2_clk;
 static DEFINE_PER_CPU(struct cpufreq_frequency_table *, freq_table);
 static bool hotplug_ready;
 
+/* Amount of time to boost all online CPUs upon exiting deep sleep */
+#define PM_WAKE_BOOST_MS (20)
+static bool is_boosted;
+static bool suspended_once;
+static struct mutex cpu_clk_lock;
+static struct delayed_work pm_unboost_work;
+
 struct cpufreq_suspend_t {
 	struct mutex suspend_mutex;
 	int device_suspended;
@@ -43,12 +50,20 @@ struct cpufreq_suspend_t {
 
 static DEFINE_PER_CPU(struct cpufreq_suspend_t, suspend_data);
 
+static int set_cpu_freq_raw(int cpu, unsigned long rate, bool boost_src)
+{
+	if (is_boosted && !boost_src)
+		return 0;
+
+	return clk_set_rate(cpu_clk[cpu], rate);
+}
+
 static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 			unsigned int index)
 {
 	int ret = 0;
 	struct cpufreq_freqs freqs;
-	unsigned long rate;
+	unsigned long rate = 0L;
 
 	freqs.old = policy->cur;
 	freqs.new = new_freq;
@@ -59,7 +74,11 @@ static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 
 	rate = new_freq * 1000;
 	rate = clk_round_rate(cpu_clk[policy->cpu], rate);
-	ret = clk_set_rate(cpu_clk[policy->cpu], rate);
+
+	mutex_lock(&cpu_clk_lock);
+	ret = set_cpu_freq_raw(policy->cpu, rate, false);
+	mutex_unlock(&cpu_clk_lock);
+
 	cpufreq_freq_transition_end(policy, &freqs, ret);
 	if (!ret)
 		trace_cpu_frequency_switch_end(policy->cpu);
@@ -72,7 +91,7 @@ static int msm_cpufreq_target(struct cpufreq_policy *policy,
 				unsigned int relation)
 {
 	int ret = 0;
-	int index;
+	int index = 0;
 	struct cpufreq_frequency_table *table;
 
 	mutex_lock(&per_cpu(suspend_data, policy->cpu).suspend_mutex);
@@ -126,12 +145,12 @@ static unsigned int msm_cpufreq_get_freq(unsigned int cpu)
 
 static int msm_cpufreq_init(struct cpufreq_policy *policy)
 {
-	int cur_freq;
-	int index;
+	int cur_freq = 0;
+	int index = 0;
 	int ret = 0;
 	struct cpufreq_frequency_table *table =
 			per_cpu(freq_table, policy->cpu);
-	int cpu;
+	int cpu = 0;
 
 	/*
 	 * In some SoC, some cores are clocked by same source, and their
@@ -143,8 +162,11 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 		if (cpu_clk[cpu] == cpu_clk[policy->cpu])
 			cpumask_set_cpu(cpu, policy->cpus);
 
-	if (cpufreq_frequency_table_cpuinfo(policy, table))
+	ret = cpufreq_table_validate_and_show(policy, table);
+	if (ret) {
 		pr_err("cpufreq: failed to get policy min/max\n");
+		return ret;
+	}
 
 	cur_freq = clk_get_rate(cpu_clk[policy->cpu])/1000;
 
@@ -176,7 +198,7 @@ static int msm_cpufreq_cpu_callback(struct notifier_block *nfb,
 		unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
-	int rc;
+	int rc = 0;
 
 	/* Fail hotplug until this driver can get CPU clocks */
 	if (!hotplug_ready)
@@ -233,9 +255,50 @@ static struct notifier_block __refdata msm_cpufreq_cpu_notifier = {
 	.notifier_call = msm_cpufreq_cpu_callback,
 };
 
+void msm_do_pm_boost(bool do_boost)
+{
+	struct cpufreq_policy policy;
+	unsigned long rate;
+	int cpu;
+
+	if (!suspended_once)
+		return;
+
+	get_online_cpus();
+	mutex_lock(&cpu_clk_lock);
+
+	is_boosted = do_boost;
+	for_each_online_cpu(cpu) {
+		if (cpufreq_get_policy(&policy, cpu))
+			continue;
+
+		if (do_boost)
+			rate = policy.cpuinfo.max_freq;
+		else
+			rate = policy.cur;
+
+		set_cpu_freq_raw(cpu, rate * 1000, true);
+	}
+
+	mutex_unlock(&cpu_clk_lock);
+	put_online_cpus();
+
+	if (do_boost)
+		schedule_delayed_work(&pm_unboost_work,
+			msecs_to_jiffies(PM_WAKE_BOOST_MS));
+}
+
+static void cpu_pm_unboost_worker(struct work_struct *work)
+{
+	msm_do_pm_boost(false);
+}
+
 static int msm_cpufreq_suspend(void)
 {
-	int cpu;
+	int cpu = 0;
+
+	suspended_once = true;
+	cancel_delayed_work_sync(&pm_unboost_work);
 
 	for_each_possible_cpu(cpu) {
 		mutex_lock(&per_cpu(suspend_data, cpu).suspend_mutex);
@@ -248,7 +311,7 @@ static int msm_cpufreq_suspend(void)
 
 static int msm_cpufreq_resume(void)
 {
-	int cpu, ret;
+	int cpu = 0, ret = 0;
 	struct cpufreq_policy policy;
 
 	for_each_possible_cpu(cpu) {
@@ -318,7 +381,7 @@ static struct cpufreq_driver msm_cpufreq_driver = {
 static struct cpufreq_frequency_table *cpufreq_parse_dt(struct device *dev,
 						char *tbl_name, int cpu)
 {
-	int ret, nf, i;
+	int ret = 0, nf = 0, i = 0;
 	u32 *data;
 	struct cpufreq_frequency_table *ftbl;
 
@@ -386,7 +449,7 @@ static int __init msm_cpufreq_probe(struct platform_device *pdev)
 	char clk_name[] = "cpu??_clk";
 	char tbl_name[] = "qcom,cpufreq-table-??";
 	struct clk *c;
-	int cpu;
+	int cpu = 0;
 	struct cpufreq_frequency_table *ftbl;
 
 	l2_clk = devm_clk_get(dev, "l2_clk");
@@ -398,6 +461,7 @@ static int __init msm_cpufreq_probe(struct platform_device *pdev)
 		c = devm_clk_get(dev, clk_name);
 		if (IS_ERR(c))
 			return PTR_ERR(c);
+		c->flags |= CLKFLAG_NO_RATE_CACHE;
 		cpu_clk[cpu] = c;
 	}
 	hotplug_ready = true;
@@ -469,12 +533,15 @@ static struct platform_driver msm_cpufreq_plat_driver = {
 
 static int __init msm_cpufreq_register(void)
 {
-	int cpu, rc;
+	int cpu = 0, rc = 0;
 
 	for_each_possible_cpu(cpu) {
 		mutex_init(&(per_cpu(suspend_data, cpu).suspend_mutex));
 		per_cpu(suspend_data, cpu).device_suspended = 0;
 	}
+
+	mutex_init(&cpu_clk_lock);
+	INIT_DELAYED_WORK(&pm_unboost_work, cpu_pm_unboost_worker);
 
 	rc = platform_driver_probe(&msm_cpufreq_plat_driver,
 				   msm_cpufreq_probe);

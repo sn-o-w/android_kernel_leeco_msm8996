@@ -1206,7 +1206,7 @@ static int smb1351_set_bms_property(struct smb1351_charger *chip,
 	}
 
 	propval.intval = value;
-	rc = chip->bms_psy->set_property(chip->bms_psy, prop, &propval);
+	rc = power_supply_set_property(chip->bms_psy, prop, &propval);
 	if (rc) {
 		pr_err("Set BMS property %d failed, rc=%d\n", prop, rc);
 		return rc;
@@ -1230,7 +1230,7 @@ static int smb1351_get_bms_property(struct smb1351_charger *chip,
 		return -ENODEV;
 	}
 
-	rc = chip->bms_psy->get_property(chip->bms_psy, prop, &propval);
+	rc = power_supply_get_property(chip->bms_psy, prop, &propval);
 	if (rc) {
 		pr_err("Set BMS property %d failed, rc=%d\n", prop, rc);
 		return rc;
@@ -1388,6 +1388,22 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 	rc = smb1351_battchg_disable(chip, USER, chip->usb_suspended_status);
 	if (rc)
 		return rc;
+
+	/* enable/disable charging by suspending usb */
+	rc = smb1351_usb_suspend(chip, USER, chip->usb_suspended_status);
+	if (rc) {
+		pr_err("Unable to %s USB input. rc=%d\n",
+			chip->usb_suspended_status ? "" : "un-", rc);
+		return rc;
+	}
+
+	/* enable/disable battery charging */
+	rc = smb1351_battchg_disable(chip, USER, chip->battchg_disabled_status);
+	if (rc)
+		pr_err("Couldn't %s charging rc = %d\n",
+			chip->battchg_disabled_status ? "disable" : "enable", rc);
+
+	return rc;
 
 	/* setup battery missing source */
 	reg = BATT_MISSING_THERM_PIN_SOURCE_BIT;
@@ -1570,6 +1586,14 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 		}
 	}
 
+	/* Disable watchdog */
+	rc = smb1351_masked_write(chip, WDOG_SAFETY_TIMER_CTRL_REG,
+				WDOG_TIMER_EN_BIT, 0);
+	if (rc) {
+		pr_err("Couldn't disable watchdog rc = %d\n", rc);
+		return rc;
+	}
+
 	/* Enable HVDCP */
 	rc = smb1351_masked_write(chip, HVDCP_BATT_MISSING_CTRL_REG,
 			HVDCP_EN_BIT, HVDCP_EN_BIT);
@@ -1577,21 +1601,6 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 		pr_err("Failed to enable HVDCP, rc=%d\n", rc);
 		return rc;
 	}
-
-	/* enable/disable charging by suspending usb */
-	rc = smb1351_usb_suspend(chip, USER, chip->usb_suspended_status);
-	if (rc) {
-		pr_err("Unable to %s USB input. rc=%d\n",
-			chip->usb_suspended_status ? "suspend" : "enable", rc);
-		return rc;
-	}
-
-	rc = smb1351_battchg_disable(chip, USER, chip->usb_suspended_status);
-	if (rc)
-		pr_err("Couldn't %s charging rc = %d\n",
-			chip->usb_suspended_status ? "disable" : "enable", rc);
-
-	return rc;
 }
 
 static enum power_supply_property smb1351_battery_properties[] = {
@@ -1600,6 +1609,8 @@ static enum power_supply_property smb1351_battery_properties[] = {
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_PARALLEL_MODE,
+	POWER_SUPPLY_PROP_INPUT_SUSPEND,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_TEMP,
@@ -1868,7 +1879,7 @@ static int smb1351_parallel_charger_enable_slave(
 	chip->parallel.slave_icl_ma = slave_icl_ma;
 
 	/* get the ICL real set in HW */
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
 	actual_slave_icl_ma = pval.intval / 1000;
 	pr_debug("parallel slave ICL, program %d, set %d\n",
@@ -1891,9 +1902,9 @@ static int smb1351_parallel_charger_enable_slave(
 
 	/* set the allotted FCC to slave charger */
 	pval.intval = slave_fcc_ma * 1000;
-	parallel_psy->set_property(parallel_psy,
+	power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	actual_slave_fcc_ma = pval.intval / 1000;
 
@@ -1988,7 +1999,7 @@ static bool smb1351_attempt_enable_parallel_slave(
 	}
 
 	/* Check if parallel slave already draw some current */
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
 	slave_current_icl_ma = pval.intval / 1000;
 	if (slave_current_icl_ma == SUSPEND_CURRENT_MA)
@@ -2040,7 +2051,7 @@ try_again:
 		rc = 0;
 		goto done;
 	}
-	rc = parallel_psy->get_property(parallel_psy,
+	rc = power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	if (rc) {
 		pr_err("Get slave FCC failed, rc=%d\n", rc);
@@ -2059,7 +2070,7 @@ try_again:
 
 	pval.intval = slave_fcc_ma * SLAVE_CHG_FCC_REDUCTION_PERCENTAGE / 100;
 	pval.intval *= 1000;
-	rc = parallel_psy->set_property(parallel_psy,
+	rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	if (rc) {
 		pr_err("Set slave FCC %duA failed, rc=%d\n", pval.intval, rc);
@@ -2587,7 +2598,7 @@ static int smb1351_parallel_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		if (chip->parallel_charger_present &&
 			(chip->vfloat_mv != val->intval)) {
-			rc = smb1351_float_voltage_set(chip, val->intval);
+			rc = smb1351_float_voltage_set(chip, chip->vfloat_mv);
 			if (!rc)
 				chip->vfloat_mv = val->intval;
 		} else {
@@ -2696,7 +2707,7 @@ static void smb1351_chg_ctrl_in_jeita(struct smb1351_charger *chip)
 	* before the disabe and enable operation.
 	*/
 	if (chip->bms_psy) {
-		rc = chip->bms_psy->get_property(chip->bms_psy,
+		rc = power_supply_get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &ret);
 		if (rc) {
 			pr_err("Couldn't read the bms capacity rc = %d\n",
@@ -2834,6 +2845,11 @@ static void smb1351_chg_adc_notification(enum qpnp_tm_state state, void *ctx)
 		}
 	}
 
+	if (!cur) {		
+		pr_err("invalid transaction: state %d, temp %d\n", state, temp);		
+		return;		
+	}
+
 	if (cur->batt_present)
 		chip->battery_missing = false;
 	else
@@ -2895,11 +2911,11 @@ static int smb1351_notify_usb_supply_type(struct smb1351_charger *chip,
 	union power_supply_propval pval = {0, };
 
 	pval.intval = type;
-	rc = chip->usb_psy->set_property(chip->usb_psy,
+	rc = power_supply_set_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_REAL_TYPE, &pval);
 	if (rc < 0) {
 		if (rc == -EINVAL) {
-			rc = chip->usb_psy->set_property(chip->usb_psy,
+			rc = power_supply_set_property(chip->usb_psy,
 					POWER_SUPPLY_PROP_TYPE, &pval);
 			if (!rc)
 				return 0;
@@ -3668,10 +3684,10 @@ static int smb1351_update_usb_supply_icl(struct smb1351_charger *chip)
 	int rc, type, icl;
 	union power_supply_propval pval = {0, };
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_REAL_TYPE, &pval);
 	if (rc == -EINVAL) {
-		rc = chip->usb_psy->get_property(chip->usb_psy,
+		rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_TYPE, &pval);
 		if (rc < 0) {
 			pr_err("Get USB supply TYPE failed, rc=%d\n", rc);
@@ -3684,7 +3700,7 @@ static int smb1351_update_usb_supply_icl(struct smb1351_charger *chip)
 
 	type = pval.intval;
 	chip->usb_psy_type = type;
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
 	if (!rc)
 		icl = pval.intval / 1000;
@@ -3771,7 +3787,7 @@ static int smb1351_force_esr_pulse_en(struct smb1351_charger *chip, bool en)
 	 * set it to main and slave charger accordingly
 	 */
 	if (en) {
-		rc = parallel_psy->get_property(parallel_psy,
+		rc = power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 		if (rc) {
 			pr_err("get slave fcc failed, rc=%d\n", rc);
@@ -3782,14 +3798,14 @@ static int smb1351_force_esr_pulse_en(struct smb1351_charger *chip, bool en)
 		slave_fcc_in_esr = current_in_esr *
 			(100 - chip->parallel.main_chg_fcc_percent) / 100;
 		pval.intval = slave_fcc_in_esr * 1000;
-		rc = parallel_psy->set_property(parallel_psy,
+		rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 		if (rc) {
 			pr_err("set slave fcc for ESR failed, rc=%d\n", rc);
 			goto unlock;
 		}
 
-		rc = parallel_psy->get_property(parallel_psy,
+		rc = power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 		if (rc) {
 			pr_err("get slave fcc for ESR failed, rc=%d\n", rc);
@@ -3809,7 +3825,7 @@ static int smb1351_force_esr_pulse_en(struct smb1351_charger *chip, bool en)
 		pr_debug("main_fcc_in_esr = %dmA\n", main_fcc_in_esr);
 	} else {
 		pval.intval = chip->slave_fcc_ma_before_esr * 1000;
-		rc = parallel_psy->set_property(parallel_psy,
+		rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 				&pval);
 		if (rc) {
@@ -3914,7 +3930,7 @@ static void smb1351_external_power_changed(struct power_supply *psy)
 	battery_soc_changed(chip);
 
 	if (parallel_psy) {
-		parallel_psy->get_property(parallel_psy,
+		power_supply_get_property(parallel_psy,
 				POWER_SUPPLY_PROP_PRESENT, &prop);
 		slave_present = prop.intval;
 		/* Don't update main charger ICL if slave is enabled */
@@ -3925,7 +3941,7 @@ static void smb1351_external_power_changed(struct power_supply *psy)
 		}
 	}
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_ONLINE, &prop);
 	if (rc) {
 		pr_err("Couldn't read USB online property, rc=%d\n", rc);
@@ -4232,6 +4248,9 @@ static int smb1351_parse_dt(struct smb1351_charger *chip)
 
 	chip->usb_suspended_status = of_property_read_bool(node,
 					"qcom,charging-disabled");
+
+	chip->battchg_disabled_status = of_property_read_bool(node,
+				"qcom,batt-charging-disabled");
 
 	chip->chg_autonomous_mode = of_property_read_bool(node,
 					"qcom,chg-autonomous-mode");

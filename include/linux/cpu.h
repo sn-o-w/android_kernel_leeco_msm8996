@@ -301,4 +301,6 @@ void idle_notifier_register(struct notifier_block *n);
 void idle_notifier_unregister(struct notifier_block *n);
 void idle_notifier_call_chain(unsigned long val);
 
+DECLARE_PER_CPU(bool, cpu_dead_idle);
+
 #endif /* _LINUX_CPU_H_ */

@@ -328,10 +328,10 @@ static __ref int watchdog_kthread(void *arg)
 			if (wdog_dd->do_ipi_ping)
 				ping_other_cpus(wdog_dd);
 			pet_watchdog(wdog_dd);
+			/* Check again before scheduling *
+			 * Could have been changed on other cpu */
+			mod_timer(&wdog_dd->pet_timer, jiffies + delay_time);
 		}
-		/* Check again before scheduling *
-		 * Could have been changed on other cpu */
-		mod_timer(&wdog_dd->pet_timer, jiffies + delay_time);
 	}
 	return 0;
 }
@@ -480,7 +480,7 @@ static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 			 * without saving registers.
 			 */
 		}
-	} else {
+	} else if (IS_ENABLED(CONFIG_MSM_MEMORY_DUMP_V2)) {
 		cpu_data = kzalloc(sizeof(struct msm_dump_data) *
 				   num_present_cpus(), GFP_KERNEL);
 		if (!cpu_data) {
@@ -562,7 +562,7 @@ static void init_watchdog_data(struct msm_watchdog_data *wdog_dd)
 	wdog_dd->min_slack_ticks = UINT_MAX;
 	wdog_dd->min_slack_ns = ULLONG_MAX;
 	configure_bark_dump(wdog_dd);
-	timeout = (wdog_dd->bark_time * WDT_HZ)/1000;
+	timeout = (wdog_dd->bark_time * WDT_HZ)/1000+5;
 	__raw_writel(timeout, wdog_dd->base + WDT0_BARK_TIME);
 	__raw_writel(timeout + 3*WDT_HZ, wdog_dd->base + WDT0_BITE_TIME);
 

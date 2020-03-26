@@ -245,6 +245,7 @@ struct fg_dt_props {
 	bool	auto_recharge_soc;
 	bool	use_esr_sw;
 	bool	disable_esr_pull_dn;
+	bool	disable_fg_twm;
 	int	cutoff_volt_mv;
 	int	empty_volt_mv;
 	int	vbatt_low_thr_mv;
@@ -326,7 +327,7 @@ struct fg_irq_info {
 };
 
 struct fg_circ_buf {
-	int	arr[20];
+	int	arr[10];
 	int	size;
 	int	head;
 };
@@ -390,6 +391,7 @@ struct fg_chip {
 	struct fg_batt_props	bp;
 	struct fg_cyc_ctr_data	cyc_ctr;
 	struct notifier_block	nb;
+	struct notifier_block	twm_nb;
 	struct fg_cap_learning  cl;
 	struct alarm            esr_sw_timer;
 	struct mutex		bus_lock;
@@ -430,6 +432,7 @@ struct fg_chip {
 	bool			slope_limit_en;
 	bool			use_ima_single_mode;
 	bool			usb_present;
+	bool			twm_state;
 	struct completion	soc_update;
 	struct completion	soc_ready;
 	struct delayed_work	profile_load_work;
@@ -497,6 +500,7 @@ extern bool is_qnovo_en(struct fg_chip *chip);
 extern void fg_circ_buf_add(struct fg_circ_buf *, int);
 extern void fg_circ_buf_clr(struct fg_circ_buf *);
 extern int fg_circ_buf_avg(struct fg_circ_buf *, int *);
+extern int fg_circ_buf_median(struct fg_circ_buf *buf, int *median);
 extern int fg_lerp(const struct fg_pt *, size_t, s32, s32 *);
 void fg_stay_awake(struct fg_chip *chip, int awake_reason);
 void fg_relax(struct fg_chip *chip, int awake_reason);

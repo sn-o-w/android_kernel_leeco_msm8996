@@ -285,6 +285,9 @@ static void update_cpu_freq(void)
 static void power_supply_callback(struct power_supply *psy)
 {
 	static struct power_supply *bms_psy;
+	static struct power_supply *usb_psy;
+	int usb_state;
+	bool is_usb_present = false;
 	union power_supply_propval ret = {0,};
 	int battery_percentage;
 	enum bcl_threshold_state prev_soc_state;
@@ -292,6 +295,15 @@ static void power_supply_callback(struct power_supply *psy)
 	if (gbcl->bcl_mode != BCL_DEVICE_ENABLED) {
 		pr_debug("BCL is not enabled\n");
 		return;
+	}
+
+	if (!usb_psy)
+		usb_psy = power_supply_get_by_name("usb");
+	if (usb_psy) {
+		usb_state = usb_psy->get_property(usb_psy,
+				POWER_SUPPLY_PROP_PRESENT, &ret);
+		if (usb_state == 0)
+			is_usb_present = ret.intval;
 	}
 
 	if (!bms_psy)
@@ -304,8 +316,12 @@ static void power_supply_callback(struct power_supply *psy)
 		pr_debug("Battery SOC reported:%d", battery_soc_val);
 		trace_bcl_sw_mitigation("SoC reported", battery_soc_val);
 		prev_soc_state = bcl_soc_state;
-		bcl_soc_state = (battery_soc_val <= soc_low_threshold) ?
-					BCL_LOW_THRESHOLD : BCL_HIGH_THRESHOLD;
+		pr_debug("is_usb_present:%d", is_usb_present);
+		if(is_usb_present)
+			bcl_soc_state = BCL_HIGH_THRESHOLD;
+		else
+			bcl_soc_state = (battery_soc_val <= soc_low_threshold) ?
+						BCL_LOW_THRESHOLD : BCL_HIGH_THRESHOLD;
 		if (bcl_soc_state == prev_soc_state)
 			return;
 		trace_bcl_sw_mitigation_event(
@@ -424,7 +440,8 @@ static void bcl_iavail_work(struct work_struct *work)
 	if (gbcl->bcl_mode == BCL_DEVICE_ENABLED) {
 		bcl_calculate_iavail_trigger();
 		/* restart the delay work for caculating imax */
-		schedule_delayed_work(&bcl->bcl_iavail_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&bcl->bcl_iavail_work,
 			msecs_to_jiffies(bcl->bcl_poll_interval_msec));
 	}
 }
@@ -802,7 +819,8 @@ static void bcl_mode_set(enum bcl_device_mode mode)
 	switch (gbcl->bcl_monitor_type) {
 	case BCL_IAVAIL_MONITOR_TYPE:
 		if (mode == BCL_DEVICE_ENABLED)
-			schedule_delayed_work(&gbcl->bcl_iavail_work, 0);
+			queue_delayed_work(system_power_efficient_wq,
+				&gbcl->bcl_iavail_work, 0);
 		else
 			cancel_delayed_work_sync(&(gbcl->bcl_iavail_work));
 		break;

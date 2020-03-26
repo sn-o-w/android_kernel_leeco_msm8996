@@ -7,6 +7,7 @@
 #include <linux/tick.h>
 #include <linux/mm.h>
 #include <linux/stackprotector.h>
+#include <linux/suspend.h>
 
 #include <asm/tlb.h>
 
@@ -77,7 +78,7 @@ void __weak arch_cpu_idle(void)
  */
 static void cpuidle_idle_call(void)
 {
-	struct cpuidle_device *dev = __this_cpu_read(cpuidle_devices);
+	struct cpuidle_device *dev = cpuidle_get_device();
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(dev);
 	int next_state, entered_state;
 	unsigned int broadcast;
@@ -105,24 +106,27 @@ static void cpuidle_idle_call(void)
 	rcu_idle_enter();
 
 	/*
+	 * Suspend-to-idle ("freeze") is a system state in which all user space
+	 * has been frozen, all I/O devices have been suspended and the only
+	 * activity happens here and in iterrupts (if any).  In that case bypass
+	 * the cpuidle governor and go stratight for the deepest idle state
+	 * available.  Possibly also suspend the local tick and the entire
+	 * timekeeping to prevent timer interrupts from kicking us out of idle
+	 * until a proper wakeup interrupt happens.
+	 */
+	if (idle_should_freeze()) {
+		cpuidle_enter_freeze();
+		local_irq_enable();
+		goto exit_idle;
+	}
+
+	/*
 	 * Ask the cpuidle framework to choose a convenient idle state.
 	 * Fall back to the default arch idle method on errors.
 	 */
 	next_state = cpuidle_select(drv, dev);
-	if (next_state < 0) {
-use_default:
-		/*
-		 * We can't use the cpuidle framework, let's use the default
-		 * idle routine.
-		 */
-		if (current_clr_polling_and_test())
-			local_irq_enable();
-		else
-			arch_cpu_idle();
-
-		goto exit_idle;
-	}
-
+	if (next_state < 0)
+		goto use_default;
 
 	/*
 	 * The idle task must be scheduled, it is pointless to
@@ -180,7 +184,22 @@ exit_idle:
 
 	rcu_idle_exit();
 	start_critical_timings();
+	return;
+
+use_default:
+	/*
+	 * We can't use the cpuidle framework, let's use the default
+	 * idle routine.
+	 */
+	if (current_clr_polling_and_test())
+		local_irq_enable();
+	else
+		arch_cpu_idle();
+
+	goto exit_idle;
 }
+
+DEFINE_PER_CPU(bool, cpu_dead_idle);
 
 /*
  * Generic idle loop implementation
@@ -189,6 +208,8 @@ exit_idle:
  */
 static void cpu_idle_loop(void)
 {
+	int cpu = smp_processor_id();
+
 	while (1) {
 		/*
 		 * If the arch has a polling bit, we maintain an invariant:
@@ -207,8 +228,11 @@ static void cpu_idle_loop(void)
 			check_pgt_cache();
 			rmb();
 
-			if (cpu_is_offline(smp_processor_id()))
+			if (cpu_is_offline(cpu)) {
+				smp_mb(); /* all activity before dead. */
+				this_cpu_write(cpu_dead_idle, true);
 				arch_cpu_idle_dead();
+			}
 
 			local_irq_disable();
 			arch_cpu_idle_enter();

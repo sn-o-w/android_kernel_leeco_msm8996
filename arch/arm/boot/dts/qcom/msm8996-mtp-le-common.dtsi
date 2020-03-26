@@ -522,6 +522,15 @@
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 };
 
+/{
+	mtp_batterydata: qcom,battery-data {
+		qcom,batt-id-range-pct = <15>;
+		#include "batterydata-zl1-pro-lishen-4000mAh.dtsi"
+		#include "batterydata-zl1-pro-scud-4000mAh.dtsi"
+		#include "batterydata-le_x2-3200mah.dtsi"
+	};
+};
+
 &dsi_jdi_1080p_video {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
 	qcom,mdss-dsi-bl-min-level = <1>;
@@ -534,7 +543,6 @@
 };
 
 &pmi8994_charger {
-	qcom,battery-data = <&mtp_batterydata>;
 	qcom,dc-psy-type = "Wipower";
 	qcom,dcin-vadc = <&pmi8994_vadc>;
 	qcom,wipower-default-ilim-map = <4000000 20000000 550 700 300>;
@@ -549,11 +557,6 @@
 					<7820000 8500000 550 700 550>;
 };
 
-&pmi8994_fg {
-	qcom,battery-data = <&mtp_batterydata>;
-	qcom,ext-sense-type;
-};
-
 &i2c_7 {
 	smb1351-charger@1d {
 		compatible = "qcom,smb1351-charger";
@@ -562,6 +565,12 @@
 		qcom,float-voltage-mv = <4400>;
 		qcom,recharge-mv = <100>;
 	};
+};
+
+&pmi8994_fg {
+	qcom,battery-data = <&mtp_batterydata>;
+	qcom,ext-sense-type;
+	qcom,resume-soc = <99>;
 };
 
 &usb_otg_switch {
@@ -580,13 +589,11 @@
 
 	mpp@a300 { /* MPP 4 */
 		/* HDMI_5v_vreg regulator enable */
-		qcom,mode = <1>;		/* Digital output */
-		qcom,output-type = <0>;		/* CMOS logic */
-		qcom,vin-sel = <2>;		/* S4 1.8V */
-		qcom,src-sel = <0>;		/* Constant */
-		qcom,master-en = <1>;		/* Enable GPIO */
-		qcom,invert = <1>;
-		status = "okay";
+		qcom,mode = <4>; /* AIN input */
+		qcom,invert = <1>; /* Enable MPP */
+		qcom,ain-route = <3>; /* AMUX 8 */
+		qcom,master-en = <1>;
+		qcom,src-sel = <0>; /* Function constant */
 	};
 };
 
@@ -653,15 +660,6 @@
 		qcom,vin-sel = <2>;             /* S4 1.8V */
 		qcom,src-sel = <7>;             /* DTEST4 */
 		qcom,master-en = <1>;           /* Enable MPP */
-		status = "okay";
-	};
-
-	mpp@a300 { /* MPP 4 */
-		/* WLED FET */
-		qcom,mode = <1>;        /* DIGITAL OUT */
-		qcom,vin-sel = <0>;     /* VIN0 */
-		qcom,src-sel = <1>;
-		qcom,master-en = <1>;
 		status = "okay";
 	};
 };

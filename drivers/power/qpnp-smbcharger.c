@@ -239,8 +239,6 @@ struct smbchg_chip {
 	unsigned int			usb_therm_lvl_sel;
 	unsigned int			*usb_thermal_mitigation;
 	unsigned int			usb_prev_therm_lvl;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	unsigned int			prev_black_call_mode;
 	unsigned int			prev_quick_charge_mode;
 #endif
@@ -292,13 +290,9 @@ struct smbchg_chip {
 	struct delayed_work		vfloat_adjust_work;
 	struct delayed_work		hvdcp_det_work;
 #ifdef CONFIG_VENDOR_LEECO
-	struct delayed_work	    letv_pd_set_vol_cur_work;
+	struct delayed_work		letv_pd_set_vol_cur_work;
 	struct delayed_work		pd_charger_init_work;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct delayed_work		weak_charger_timeout_work;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct delayed_work	    	first_detect_float_work;
 #endif
 
@@ -310,8 +304,6 @@ struct smbchg_chip {
 	struct mutex			therm_lvl_lock;
 #ifdef CONFIG_VENDOR_LEECO
 	struct mutex			usb_therm_lvl_lock;
-#endif
-#ifdef CONFIG_VENDOR_LEECO
 	struct mutex			black_call_mode_lock;
 	struct mutex			quick_charge_mode_lock;
 #endif
@@ -476,7 +468,7 @@ extern char g_boot_mode[];
 
 #ifdef CONFIG_VENDOR_LEECO
 /* maybe unused? */
-	/* battery charging disabled while system thermal levels rise */
+/* battery charging disabled while system thermal levels rise */
 #define BATTCHG_THERMAL_EN_VOTER "BATTCHG_THERMAL_EN_VOTER"
 #endif
 
@@ -1318,7 +1310,7 @@ static int set_property_on_fg(struct smbchg_chip *chip,
 	}
 
 	ret.intval = val;
-	rc = chip->bms_psy->set_property(chip->bms_psy, prop, &ret);
+	rc = power_supply_set_property(chip->bms_psy, prop, &ret);
 	if (rc)
 		pr_smb(PR_STATUS,
 			"bms psy does not allow updating prop %d rc = %d\n",
@@ -1341,7 +1333,7 @@ static int get_property_from_fg(struct smbchg_chip *chip,
 		return -EINVAL;
 	}
 
-	rc = chip->bms_psy->get_property(chip->bms_psy, prop, &ret);
+	rc = power_supply_get_property(chip->bms_psy, prop, &ret);
 	if (rc) {
 		pr_smb(PR_STATUS,
 			"bms psy doesn't support reading prop %d rc = %d\n",
@@ -1533,7 +1525,8 @@ static void get_property_from_typec(struct smbchg_chip *chip,
 {
 	int rc;
 
-	rc = chip->typec_psy->get_property(chip->typec_psy, property, prop);
+	rc = power_supply_get_property(chip->typec_psy,
+			property, prop);
 	if (rc)
 		pr_smb(PR_TYPEC,
 			"typec psy doesn't support reading prop %d rc = %d\n",
@@ -1554,7 +1547,7 @@ static void update_typec_status(struct smbchg_chip *chip)
 		chip->typec_current_ma = capability.intval;
 
 		if (!chip->skip_usb_notification) {
-			rc = chip->usb_psy->set_property(chip->usb_psy,
+			rc = power_supply_set_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_INPUT_CURRENT_MAX,
 				&capability);
 			if (rc)
@@ -2399,12 +2392,18 @@ static bool smbchg_is_usbin_active_pwr_src(struct smbchg_chip *chip)
 
 static void smbchg_detect_parallel_charger(struct smbchg_chip *chip)
 {
+	int rc;
 	struct power_supply *parallel_psy = get_parallel_psy(chip);
+	union power_supply_propval pval = {0, };
 
-	if (parallel_psy)
-		chip->parallel_charger_detected =
-			power_supply_set_present(parallel_psy, true) ?
-								false : true;
+	if (parallel_psy) {
+		pval.intval = true;
+		rc = power_supply_set_property(parallel_psy,
+				POWER_SUPPLY_PROP_PRESENT, &pval);
+		chip->parallel_charger_detected = rc ? false : true;
+		if (rc)
+			pr_debug("parallel-charger absent rc=%d\n", rc);
+	}
 }
 
 static int smbchg_parallel_usb_charging_en(struct smbchg_chip *chip, bool en)
@@ -2416,7 +2415,7 @@ static int smbchg_parallel_usb_charging_en(struct smbchg_chip *chip, bool en)
 		return 0;
 
 	pval.intval = en;
-	return parallel_psy->set_property(parallel_psy,
+	return power_supply_set_property(parallel_psy,
 		POWER_SUPPLY_PROP_CHARGING_ENABLED, &pval);
 }
 
@@ -2522,7 +2521,7 @@ static int smbchg_run_parallel_aicl(struct smbchg_chip *chip)
 
 	/* Enable slave AICL */
 	pval.intval = 1;
-	rc = parallel_psy->set_property(parallel_psy,
+	rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_ENABLE_AICL, &pval);
 	if (rc) {
 		pr_err("Unable to enable AICL on parallel_psy rc=%d\n", rc);
@@ -2532,7 +2531,7 @@ static int smbchg_run_parallel_aicl(struct smbchg_chip *chip)
 	/* Set max allowable FCC to slave */
 	fcc_ma = get_effective_result_locked(chip->fcc_votable);
 	pval.intval = fcc_ma * 1000;
-	rc = parallel_psy->set_property(parallel_psy,
+	rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	if (rc) {
 		pr_err("Unable to set FCC for parallel_psy rc=%d\n",
@@ -2558,7 +2557,7 @@ static int smbchg_run_parallel_aicl(struct smbchg_chip *chip)
 		goto restore_icl;
 	}
 
-	rc = parallel_psy->get_property(parallel_psy,
+	rc = power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_INPUT_CURRENT_MAX, &pval);
 	if (rc) {
 		pr_err("Unable to read AICL from parallel_psy rc=%d\n", rc);
@@ -2579,14 +2578,14 @@ static int smbchg_run_parallel_aicl(struct smbchg_chip *chip)
 restore_icl:
 	/* Disable slave AICL */
 	pval.intval = 0;
-	rc = parallel_psy->set_property(parallel_psy,
+	rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_ENABLE_AICL, &pval);
 	if (rc)
 		pr_err("Unable to disable AICL on parallel_psy rc=%d\n", rc);
 
 	/* Suspend slave and set back last ICL value for main charger */
 	pval.intval  = 1;
-	rc = parallel_psy->set_property(parallel_psy,
+	rc = power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
 	if (rc)
 		pr_err("Unable to suspend-input to parallel_psy rc=%d\n", rc);
@@ -2651,7 +2650,7 @@ try_again:
 		pr_smb(PR_STATUS, "Not parallel charging, skipping\n");
 		goto done;
 	}
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	tries += 1;
 	parallel_fcc_ma = pval.intval / 1000;
@@ -2668,7 +2667,7 @@ try_again:
 		pval.intval);
 	/* Change it to uA */
 	pval.intval *= 1000;
-	parallel_psy->set_property(parallel_psy,
+	power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	/*
 	 * sleep here for 100 ms in order to make sure the charger has a chance
@@ -2715,6 +2714,8 @@ static void smbchg_parallel_usb_enable(struct smbchg_chip *chip,
 			"Couldn't set Vflt on parallel psy rc: %d\n", rc);
 		return;
 	}
+	power_supply_set_voltage_limit(chip->usb_psy,
+			(chip->vfloat_mv + 50) * 1000);
 	/* Set USB ICL */
 	target_icl_ma = get_effective_result_locked(chip->usb_icl_votable);
 	if (target_icl_ma < 0) {
@@ -2731,7 +2732,7 @@ static void smbchg_parallel_usb_enable(struct smbchg_chip *chip,
 	power_supply_set_current_limit(parallel_psy,
 				new_parallel_cl_ma * 1000);
 	/* read back the real amount of current we are getting */
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
 	set_parallel_cl_ma = pval.intval / 1000;
 	chip->parallel.current_max_ma = new_parallel_cl_ma;
@@ -2752,10 +2753,10 @@ static void smbchg_parallel_usb_enable(struct smbchg_chip *chip,
 	parallel_chg_fcc_percent = 100 - smbchg_main_chg_fcc_percent;
 	target_parallel_fcc_ma = (fcc_ma * parallel_chg_fcc_percent) / 100;
 	pval.intval = target_parallel_fcc_ma * 1000;
-	parallel_psy->set_property(parallel_psy,
+	power_supply_set_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	/* check how much actual current is supplied by the parallel charger */
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
 	supplied_parallel_fcc_ma = pval.intval / 1000;
 	pr_smb(PR_MISC, "Requested FCC = %d from parallel, got %d\n",
@@ -2923,7 +2924,7 @@ static bool smbchg_is_parallel_usb_ok(struct smbchg_chip *chip,
 		chip->parallel.initial_aicl_ma = current_limit_ma;
 	}
 
-	parallel_psy->get_property(parallel_psy,
+	power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
 	parallel_cl_ma = pval.intval / 1000;
 	/*
@@ -4362,8 +4363,11 @@ static int smbchg_float_voltage_set(struct smbchg_chip *chip, int vfloat_mv)
 
 	if (rc)
 		dev_err(chip->dev, "Couldn't set float voltage rc = %d\n", rc);
-	else
+	else {
 		chip->vfloat_mv = vfloat_mv;
+		power_supply_set_voltage_limit(chip->usb_psy,
+				chip->vfloat_mv * 1000);
+	}
 
 	return rc;
 }
@@ -4783,7 +4787,7 @@ static void smbchg_aicl_deglitch_wa_check(struct smbchg_chip *chip)
 	 * is removed.
 	 */
 	if (!chip->vbat_above_headroom) {
-		rc = chip->bms_psy->get_property(chip->bms_psy,
+		rc = power_supply_get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_MIN, &prop);
 		if (rc < 0) {
 			pr_err("could not read voltage_min, rc=%d\n", rc);
@@ -4822,7 +4826,7 @@ static int smbchg_config_chg_battery_type(struct smbchg_chip *chip)
 	struct device_node *node = chip->spmi->dev.of_node;
 	union power_supply_propval prop = {0,};
 
-	rc = chip->bms_psy->get_property(chip->bms_psy,
+	rc = power_supply_get_property(chip->bms_psy,
 			POWER_SUPPLY_PROP_BATTERY_TYPE, &prop);
 	if (rc) {
 		pr_smb(PR_STATUS, "Unable to read battery-type rc=%d\n", rc);
@@ -4837,19 +4841,27 @@ static int smbchg_config_chg_battery_type(struct smbchg_chip *chip)
 	if (chip->battery_type && !strcmp(prop.strval, chip->battery_type))
 		return 0;
 
+	chip->battery_type = prop.strval;
 	batt_node = of_parse_phandle(node, "qcom,battery-data", 0);
 	if (!batt_node) {
 		pr_smb(PR_MISC, "No batterydata available\n");
 		return 0;
 	}
 
-	profile_node = of_batterydata_get_best_profile(batt_node,
-							"bms", NULL);
-	if (!profile_node) {
-		pr_err("couldn't find profile handle\n");
-		return -EINVAL;
+	rc = power_supply_get_property(chip->bms_psy,
+			POWER_SUPPLY_PROP_RESISTANCE_ID, &prop);
+	if (rc < 0) {
+		pr_smb(PR_STATUS, "Unable to read battery-id rc=%d\n", rc);
+		return 0;
 	}
-	chip->battery_type = prop.strval;
+
+	profile_node = of_batterydata_get_best_profile(batt_node,
+				prop.intval / 1000, NULL);
+	if (IS_ERR_OR_NULL(profile_node)) {
+		rc = PTR_ERR(profile_node);
+		pr_err("couldn't find profile handle %d\n", rc);
+		return rc;
+	}
 
 	/* change vfloat */
 	rc = of_property_read_u32(profile_node, "qcom,max-voltage-uv",
@@ -4934,7 +4946,7 @@ static void check_battery_type(struct smbchg_chip *chip)
 		chip->bms_psy =
 			power_supply_get_by_name((char *)chip->bms_psy_name);
 	if (chip->bms_psy) {
-		chip->bms_psy->get_property(chip->bms_psy,
+		power_supply_get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_BATTERY_TYPE, &prop);
 		en = (strcmp(prop.strval, UNKNOWN_BATT_TYPE) != 0
 				|| chip->charge_unknown_battery)
@@ -4943,7 +4955,7 @@ static void check_battery_type(struct smbchg_chip *chip)
 				BATTCHG_UNKNOWN_BATTERY_EN_VOTER, !en, 0);
 
 		if (!chip->skip_usb_suspend_for_fake_battery) {
-			chip->bms_psy->get_property(chip->bms_psy,
+			power_supply_get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_RESISTANCE_ID, &prop);
 			/* suspend USB path for invalid battery-id */
 			en = (prop.intval <= MAX_INV_BATT_ID &&
@@ -4966,7 +4978,7 @@ static int check_charger_status(struct smbchg_chip *chip)
 
 	chip->batt_st = get_prop_batt_status(chip);
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_ONLINE, &pr);
 	if(rc) {
 		pr_err("get usb online failed\n");
@@ -5706,7 +5718,7 @@ static int smbchg_set_optimal_charging_mode(struct smbchg_chip *chip, int type)
 }
 
 /* Should be higher and tunable from userspace. */
-#define DEFAULT_SDP_MA		100
+#define DEFAULT_SDP_MA		500
 #define DEFAULT_ACA_MA		900 /* Own value, default 1000mA. */
 #ifdef CONFIG_VENDOR_LEECO
 #define DEFAULT_CDP_MA		1000
@@ -5716,7 +5728,8 @@ static int smbchg_set_optimal_charging_mode(struct smbchg_chip *chip, int type)
 static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 						enum power_supply_type type)
 {
-	int rc, current_limit_ma;
+	int rc;
+	int current_limit_ma = DEFAULT_SDP_MA;
 	union power_supply_propval propval;
 
 	/*
@@ -5775,7 +5788,7 @@ static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 
 	if (!chip->skip_usb_notification) {
 		propval.intval = type;
-		chip->usb_psy->set_property(chip->usb_psy,
+		power_supply_set_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_REAL_TYPE,
 				&propval);
         power_supply_set_current_limit(chip->usb_psy, current_limit_ma*1000);
@@ -6008,7 +6021,7 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 	/* cancel/wait for hvdcp pending work if any */
 	cancel_delayed_work_sync(&chip->hvdcp_det_work);
 	smbchg_relax(chip, PM_DETECT_HVDCP);
-	smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_UNKNOWN);
+	smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_USB);
 
 	if (chip->parallel.use_parallel_aicl) {
 		complete_all(&chip->hvdcp_det_done);
@@ -7038,8 +7051,7 @@ static int smbchg_dp_dm(struct smbchg_chip *chip, int val)
 		break;
 	case POWER_SUPPLY_DP_DM_DP_PULSE:
 		if (chip->schg_version == QPNP_SCHG)
-			rc = set_usb_psy_dp_dm(chip,
-					POWER_SUPPLY_DP_DM_DP_PULSE);
+			rc = set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DP_PULSE);
 		else
 			rc = smbchg_dp_pulse_lite(chip);
 		if (!rc)
@@ -7048,8 +7060,7 @@ static int smbchg_dp_dm(struct smbchg_chip *chip, int val)
 		break;
 	case POWER_SUPPLY_DP_DM_DM_PULSE:
 		if (chip->schg_version == QPNP_SCHG)
-			rc = set_usb_psy_dp_dm(chip,
-					POWER_SUPPLY_DP_DM_DM_PULSE);
+			rc = set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DM_PULSE);
 		else
 			rc = smbchg_dm_pulse_lite(chip);
 		if (!rc && chip->pulse_cnt)
@@ -7125,7 +7136,7 @@ static void update_typec_capability_status(struct smbchg_chip *chip,
 	pr_smb(PR_TYPEC, "typec capability = %dma\n", val->intval);
 
 	if (!chip->skip_usb_notification) {
-		rc = chip->usb_psy->set_property(chip->usb_psy,
+		rc = power_supply_set_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_INPUT_CURRENT_MAX, val);
 		if (rc)
 			pr_err("typec failed to set current max rc=%d\n", rc);
@@ -7215,22 +7226,22 @@ static void smbchg_external_power_changed(struct power_supply *psy)
 	check_charger_status(chip);
 #endif
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_CHARGING_ENABLED, &prop);
 	if (rc == 0)
 		vote(chip->usb_suspend_votable, POWER_SUPPLY_EN_VOTER,
 				!prop.intval, 0);
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_CURRENT_MAX, &prop);
 	if (rc == 0)
 		current_limit = prop.intval / 1000;
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_REAL_TYPE, &prop);
 #ifdef CONFIG_VENDOR_LEECO
 	/* Register custom LE charging modes as non SDP as well. */
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 		POWER_SUPPLY_PROP_TYPE, &prop);
 
 	if (prop.intval == POWER_SUPPLY_TYPE_USB_PD
@@ -7564,6 +7575,7 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		val->intval = get_prop_batt_current_now(chip);
+		val->intval *= (-1);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = get_prop_batt_voltage_now(chip);
@@ -7946,22 +7958,34 @@ static irqreturn_t chg_hot_handler(int irq, void *_chip)
 static irqreturn_t chg_term_handler(int irq, void *_chip)
 {
 	struct smbchg_chip *chip = _chip;
+	int rc;
+	u8 reg = 0;
+	bool terminated = false;
 
-	pr_smb(PR_INTERRUPT, "tcc triggered\n");
+	rc = smbchg_read(chip, &reg, chip->chgr_base + RT_STS, 1);
+	if (rc) {
+		dev_err(chip->dev, "Error reading RT_STS rc= %d\n", rc);
+	} else {
+		terminated = !!(reg & BAT_TCC_REACHED_BIT);
+		pr_smb(PR_INTERRUPT, "triggered: 0x%02x\n", reg);
+	}
 	/*
-	 * Charge termination is a pulse and not level triggered. That means,
-	 * TCC bit in RT_STS can get cleared by the time this interrupt is
-	 * handled. Instead of relying on that to determine whether the
-	 * charge termination had happened, we've to simply notify the FG
-	 * about this as long as the interrupt is handled.
+	 * If charging has not actually terminated, then this means that
+	 * either this is a manual call to chg_term_handler during
+	 * determine_initial_status(), or the charger has instantly restarted
+	 * charging.
+	 *
+	 * In either case, do not do the usual status updates here. If there
+	 * is something that needs to be updated, the recharge handler will
+	 * handle it.
 	 */
-	set_property_on_fg(chip, POWER_SUPPLY_PROP_CHARGE_DONE, 1);
-
-	smbchg_parallel_usb_check_ok(chip);
-	if (chip->psy_registered)
-		power_supply_changed(&chip->batt_psy);
-	smbchg_charging_status_change(chip);
-
+	if (terminated) {
+		smbchg_parallel_usb_check_ok(chip);
+		if (chip->psy_registered)
+			power_supply_changed(&chip->batt_psy);
+		smbchg_charging_status_change(chip);
+		set_property_on_fg(chip, POWER_SUPPLY_PROP_CHARGE_DONE, 1);
+	}
 	return IRQ_HANDLED;
 }
 
@@ -8205,14 +8229,14 @@ static void vbus_monitor_work(struct work_struct *work)
 
 	mon_cn ++;
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
 	if (rc == 0)
 		vbus_mv = prop.intval / 1000;
 
 	ma = get_prop_batt_current_now(chip)/1000;
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_ONLINE, &prop);
 	if(rc)
 		pr_err("get usb online failed\n");
@@ -8221,7 +8245,7 @@ static void vbus_monitor_work(struct work_struct *work)
 
 	chip->batt_st = get_prop_batt_status(chip);
 
-	chip->bms_psy->get_property(chip->bms_psy,
+	power_supply_get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_RESISTANCE_ID, &prop);
 	batt_id = prop.intval;
 
@@ -8401,7 +8425,7 @@ static irqreturn_t src_detect_handler(int irq, void *_chip)
 	queue_delayed_work(system_power_efficient_wq,
 		&chip->vbus_monitor,msecs_to_jiffies(0));
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
 	if (rc == 0)
 		vbus_mv = prop.intval / 1000;
@@ -8623,6 +8647,7 @@ static int determine_initial_status(struct smbchg_chip *chip)
 	batt_warm_handler(0, chip);
 	batt_cool_handler(0, chip);
 	batt_cold_handler(0, chip);
+	chg_term_handler(0, chip);
 	if (chip->typec_psy) {
 		get_property_from_typec(chip, POWER_SUPPLY_PROP_TYPE, &type);
 		update_typec_otg_status(chip, type.intval, true);
@@ -10252,7 +10277,7 @@ static void smbchg_letv_pd_set_vol_cur_work(struct work_struct *work)
 		smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_USB_LE_PD);
 	}
 
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
 	if (rc == 0)
 		vbus_vol = prop.intval / 1000;
@@ -10265,7 +10290,7 @@ static void smbchg_letv_pd_set_vol_cur_work(struct work_struct *work)
 	if ((chip->parallel.current_max_ma == 0) || !parallel_psy)
 		fcc_current = chip->fastchg_current_ma;
 	else {
-		parallel_psy->get_property(parallel_psy,
+		power_supply_get_property(parallel_psy,
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &prop);
 		fcc_current = chip->fastchg_current_ma + prop.intval / 1000;
 	}
@@ -10320,7 +10345,7 @@ static void smbchg_pd_charger_init_work(struct work_struct *work)
 		goto out;
 	}
 	msleep(100);
-	rc = chip->usb_psy->get_property(chip->usb_psy,
+	rc = power_supply_get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
 	if (rc == 0) {
 		vbus_vol = prop.intval / 1000;
@@ -10854,6 +10879,8 @@ unregister_batt_psy:
 out:
 	handle_usb_removal(chip);
 votables_cleanup:
+	if (chip->hvdcp_enable_votable)
+		destroy_votable(chip->hvdcp_enable_votable);
 	if (chip->aicl_deglitch_short_votable)
 		destroy_votable(chip->aicl_deglitch_short_votable);
 	if (chip->hw_aicl_rerun_enable_indirect_votable)

@@ -25,6 +25,7 @@
 #include <linux/uaccess.h>
 #include <linux/tracehook.h>
 #include <linux/ratelimit.h>
+#include <linux/syscalls.h>
 
 #include <asm/debug-monitors.h>
 #include <asm/elf.h>
@@ -335,6 +336,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
  * the kernel can handle, and then we build all the user-level signal handling
  * stack-frames in one go after that.
  */
+
 static void do_signal(struct pt_regs *regs)
 {
 	unsigned long continue_addr = 0, restart_addr = 0;
@@ -409,6 +411,9 @@ static void do_signal(struct pt_regs *regs)
 asmlinkage void do_notify_resume(struct pt_regs *regs,
 				 unsigned int thread_flags)
 {
+	/* Check valid user FS if needed */
+	addr_limit_user_check();
+
 	if (thread_flags & _TIF_SIGPENDING)
 		do_signal(regs);
 

@@ -2775,9 +2775,6 @@ static int synaptics_rmi4_f1a_init(struct synaptics_rmi4_data *rmi4_data,
 	if (retval < 0)
 		goto error_exit;
 
-	rmi4_data->button_0d_enabled = 1;
-	rmi4_data->touch_AA_enabled = 1;
-
 	return 0;
 
 error_exit:
@@ -4268,6 +4265,8 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 	rmi4_data->vdd_enabled = false;
 	rmi4_data->vcc_i2c_enabled = false;
 	rmi4_data->fingers_on_2d = false;
+	rmi4_data->button_0d_enabled = 1;
+	rmi4_data->touch_AA_enabled = 1;
 
 	rmi4_data->reset_device = synaptics_rmi4_reset_device;
 	rmi4_data->irq_enable = synaptics_rmi4_irq_enable;

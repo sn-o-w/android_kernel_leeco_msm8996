@@ -386,13 +386,6 @@
 };
 /*haptics end*/
 
-/{
-	mtp_batterydata: qcom,battery-data {
-		qcom,batt-id-range-pct = <15>;
-		#include "batterydata-le_x2-3200mah.dtsi"
-	};
-};
-
 &pmi8994_charger {
 	qcom,float-voltage-mv = <4400>;
 	qcom,fastchg-current-ma = <4500>;
@@ -403,8 +396,8 @@
 &pmi8994_fg {
 	qcom,warm-bat-decidegc = <450>;
 	qcom,hot-bat-decidegc = <500>;
-	qcom,cool-bat-decidegc = <150>;
-	qcom,cold-bat-decidegc = <0>;
+	qcom,cool-bat-decidegc = <0>;
+	qcom,cold-bat-decidegc = <(-100)>;
 };
 
 
