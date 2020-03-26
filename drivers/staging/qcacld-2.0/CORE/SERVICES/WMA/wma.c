@@ -3046,10 +3046,12 @@ static int wma_link_status_event_handler(void *handle, u_int8_t *cmd_param_info,
 
 	event = param_buf->fixed_param;
 	if (event->num_vdev_stats > ((WMA_SVC_MSG_MAX_SIZE -
-	    sizeof(*event)) / sizeof(wmi_vdev_rate_ht_info))) {
-		WMA_LOGE("%s: excess vdev_stats buffers:%d", __func__,
-			event->num_vdev_stats);
-		VOS_ASSERT(0);
+	    sizeof(*event)) / sizeof(wmi_vdev_rate_ht_info)) ||
+	    event->num_vdev_stats > param_buf->num_ht_info) {
+		WMA_LOGE("%s: excess vdev_stats buffers:%d, num_ht_info:%d",
+			__func__,
+			event->num_vdev_stats,
+			param_buf->num_ht_info);
 		return -EINVAL;
 	}
 	buf_size = sizeof(wmi_vdev_rate_stats_event_fixed_param) +
@@ -3277,6 +3279,12 @@ static int wma_stats_event_handler(void *handle, u_int8_t *cmd_param_info,
 
 	rssi_event = param_buf->chain_stats;
 	if (rssi_event) {
+		if (rssi_event->num_per_chain_rssi_stats >
+		    param_buf->num_rssi_stats) {
+			WMA_LOGE("%s: Invalid num_per_chain_rssi_stats:%d",
+				__func__, rssi_event->num_per_chain_rssi_stats);
+			return -EINVAL;
+		}
 		if ((((rssi_event->tlv_header & 0xFFFF0000) >> 16) ==
 				WMITLV_TAG_STRUC_wmi_per_chain_rssi_stats) &&
 			 ((rssi_event->tlv_header & 0x0000FFFF) ==
@@ -3517,8 +3525,10 @@ static int wma_peer_info_event_handler(void *handle, u_int8_t *cmd_param_info,
 	if (event->num_peers >
 		((WMA_SVC_MSG_MAX_SIZE -
 		  sizeof(wmi_peer_stats_info_event_fixed_param))/
-		 sizeof(wmi_peer_stats_info))) {
-		WMA_LOGE("Excess num of peers from fw %d", event->num_peers);
+		  sizeof(wmi_peer_stats_info)) || event->num_peers >
+		  param_buf->num_peer_stats_info) {
+		WMA_LOGE("Excess num of peers from fw %d, num_peer_stats_info:%d",
+			event->num_peers, param_buf->num_peer_stats_info);
 		return -EINVAL;
 	}
 	buf_size = sizeof(wmi_peer_stats_info_event_fixed_param) +
@@ -3715,7 +3725,8 @@ static void wma_handle_sta_peer_info(uint32_t num_peer_stats,
 			WMI_MAC_ADDR_TO_CHAR_ARRAY(&(peer_stats->peer_macaddr),
 				peer_info->info[0].peer_macaddr);
 			peer_info->info[0].rssi =
-						peer_stats->peer_rssi;
+						peer_stats->peer_rssi +
+						WMA_TGT_NOISE_FLOOR_DBM;
 			peer_info->info[0].tx_rate = peer_stats->peer_tx_rate;
 			peer_info->info[0].rx_rate = peer_stats->peer_rx_rate;
 			WMA_LOGD("%s peer %pM rssi %d tx_rate %d rx_rate %d",
@@ -3740,7 +3751,8 @@ static void wma_handle_sta_peer_info(uint32_t num_peer_stats,
 		for (i = 0; i < num_peer_stats; i++) {
 			WMI_MAC_ADDR_TO_CHAR_ARRAY(&(peer_stats->peer_macaddr),
 					peer_info->info[j].peer_macaddr);
-			peer_info->info[j].rssi = peer_stats->peer_rssi;
+			peer_info->info[j].rssi = peer_stats->peer_rssi +
+						WMA_TGT_NOISE_FLOOR_DBM;
 			peer_info->info[j].tx_rate = peer_stats->peer_tx_rate;
 			peer_info->info[j].rx_rate = peer_stats->peer_rx_rate;
 			WMA_LOGD("%s peer %pM rssi %d tx_rate %d rx_rate %d",
@@ -4367,6 +4379,10 @@ static int wma_extscan_hotlist_match_event_handler(void *handle,
 		WMA_LOGE("%s: Hotlist AP's list invalid", __func__);
 		return -EINVAL;
 	}
+	if (numap > param_buf->num_hotlist_match) {
+		WMA_LOGE("Invalid no of total enteries %d", numap);
+		return -EINVAL;
+	}
 	if (numap > WMA_EXTSCAN_MAX_HOTLIST_ENTRIES) {
 		WMA_LOGE("%s: Total Entries %u greater than max",
 			  __func__, numap);
@@ -4667,9 +4683,11 @@ static int wma_extscan_cached_results_event_handler(void *handle,
 		goto noresults;
 	}
 	if (event->num_entries_in_page >
-		(WMA_SVC_MSG_MAX_SIZE - sizeof(*event))/sizeof(*src_hotlist)) {
-		WMA_LOGE("%s:excess num_entries_in_page %d in WMI event",
-				__func__, event->num_entries_in_page);
+		(WMA_SVC_MSG_MAX_SIZE - sizeof(*event))/sizeof(*src_hotlist) ||
+		event->num_entries_in_page > param_buf->num_bssid_list) {
+		WMA_LOGE("%s:excess num_entries_in_page %d in WMI event. num_bssid_list %d",
+				__func__,
+				event->num_entries_in_page, param_buf->num_bssid_list);
 		return -EINVAL;
 	} else {
 		total_len = sizeof(*event) +
@@ -4797,6 +4815,10 @@ static int wma_extscan_change_results_event_handler(void *handle,
 		WMA_LOGE("%s: Results invalid", __func__);
 		return -EINVAL;
 	}
+	if (numap > param_buf->num_bssid_signal_descriptor_list) {
+		WMA_LOGE("%s: Invalid num of entries in page: %d", __func__, numap);
+		return -EINVAL;
+	}
 	for (i = 0; i < numap; i++) {
 		if (src_chglist->num_rssi_samples > (UINT_MAX - rssi_num)) {
 			WMA_LOGE("%s: Invalid num of rssi samples %d numap %d rssi_num %d",
@@ -4854,6 +4876,13 @@ static int wma_extscan_change_results_event_handler(void *handle,
 		dest_ap->numOfRssi =
 				src_chglist->num_rssi_samples;
 		if (dest_ap->numOfRssi) {
+			if ((dest_ap->numOfRssi + count) >
+			    param_buf->num_rssi_list) {
+				WMA_LOGE("%s: Invalid num in rssi list: %d",
+					__func__, dest_ap->numOfRssi);
+				vos_mem_free(dest_chglist);
+				return -EINVAL;
+			}
 			for (k = 0; k < dest_ap->numOfRssi; k++) {
 				dest_ap->rssi[k] = WMA_TGT_NOISE_FLOOR_DBM +
 							src_rssi[count++];
@@ -5036,9 +5065,10 @@ static int wma_unified_link_iface_stats_event_handler(void *handle,
 		WMA_LOGA("%s: Invalid param_tlvs for Iface Stats", __func__);
 		return -EINVAL;
 	}
-	if (link_stats->num_ac > WIFI_AC_MAX) {
-		WMA_LOGE("%s: Excess data received from firmware num_ac %d",
-			__func__, link_stats->num_ac);
+	if (link_stats->num_ac > WIFI_AC_MAX || link_stats->num_ac >
+	    param_tlvs->num_ac) {
+		WMA_LOGE("%s: Excess data received from firmware num_ac %d, param_tlvs->num_ac %d",
+			__func__, link_stats->num_ac, param_tlvs->num_ac);
 		return -EINVAL;
 	}
 
@@ -5159,7 +5189,8 @@ static int wma_unified_link_peer_stats_event_handler(void *handle,
 
 	do {
 		if (fixed_param->num_peers >
-			WMA_SVC_MSG_MAX_SIZE/sizeof(wmi_peer_link_stats)) {
+			WMA_SVC_MSG_MAX_SIZE/sizeof(wmi_peer_link_stats) ||
+			fixed_param->num_peers > param_tlvs->num_peer_stats) {
 			excess_data = true;
 			break;
 		} else {
@@ -5176,7 +5207,8 @@ static int wma_unified_link_peer_stats_event_handler(void *handle,
 				total_num_rates += temp_peer_stats->num_rates;
 				if (total_num_rates >
 				    WMA_SVC_MSG_MAX_SIZE /
-				    sizeof(wmi_rate_stats)) {
+				    sizeof(wmi_rate_stats) || total_num_rates >
+				    param_tlvs->num_peer_rate_stats) {
 					excess_data = true;
 					break;
 				}
@@ -5191,7 +5223,6 @@ static int wma_unified_link_peer_stats_event_handler(void *handle,
 	    (buf_len > WMA_SVC_MSG_MAX_SIZE - sizeof(*fixed_param))) {
 		WMA_LOGE("excess wmi buffer: rates:%d, peers:%d",
 			peer_stats->num_rates, fixed_param->num_peers);
-		VOS_ASSERT(0);
 		return -EINVAL;
 	}
 
@@ -5312,14 +5343,26 @@ static int wma_unified_radio_tx_power_level_stats_event_handler(void *handle,
 	}
 
 	if (fixed_param->num_tx_power_levels > ((WMA_SVC_MSG_MAX_SIZE -
-	    sizeof(*fixed_param)) / sizeof(uint32_t))) {
-		WMA_LOGE("%s: excess tx_power buffers:%d", __func__,
-			fixed_param->num_tx_power_levels);
+	    sizeof(*fixed_param)) / sizeof(uint32_t)) ||
+	    fixed_param->num_tx_power_levels >
+	    param_tlvs->num_tx_time_per_power_level) {
+		WMA_LOGE("%s: excess tx_power buffers:%d, num_tx_time_per_power_level:%d",
+			__func__, fixed_param->num_tx_power_levels,
+			param_tlvs->num_tx_time_per_power_level);
 		return -EINVAL;
 	}
 
 	rs_results = (tSirWifiRadioStat *) &link_stats_results->results[0];
 	tx_power_level_values = (uint8 *) param_tlvs->tx_time_per_power_level;
+
+	if (rs_results->total_num_tx_power_levels &&
+	    fixed_param->total_num_tx_power_levels >
+		rs_results->total_num_tx_power_levels) {
+		WMA_LOGE("%s: excess tx_power buffers:%d, total_num_tx_power_levels:%d",
+			 __func__, fixed_param->total_num_tx_power_levels,
+			 rs_results->total_num_tx_power_levels);
+		return -EINVAL;
+	}
 
 	rs_results->total_num_tx_power_levels =
 				fixed_param->total_num_tx_power_levels;
@@ -5428,7 +5471,8 @@ static int wma_unified_link_radio_stats_event_handler(void *handle,
 	}
 
 	if (radio_stats->num_channels >
-	    NUM_2_4GHZ_CHANNELS + NUM_5GHZ_CHANNELS) {
+	    (NUM_2_4GHZ_CHANNELS + NUM_5GHZ_CHANNELS) ||
+		radio_stats->num_channels > param_tlvs->num_channel_stats) {
 		WMA_LOGE("%s: Too many channels %d",
 			 __func__, radio_stats->num_channels);
 		return -EINVAL;
@@ -6437,6 +6481,10 @@ static void wma_config_stats_primary_mac(struct wma_handle *wma,
 	ol_txrx_pdev_handle pdev;
 
 	pdev = vos_get_context(VOS_MODULE_ID_TXRX, wma->vos_context);
+	if(!pdev) {
+		WMA_LOGD(FL("Context data is not allocated for VOS TXRX module"));
+		return;
+	}
 
 	/* Get the peer ID */
 	peer = ol_txrx_find_peer_by_addr(pdev, params->bssid, &peer_id);
@@ -8050,8 +8098,8 @@ static int wma_nan_rsp_event_handler(void *handle, u_int8_t *event_buf,
 	if (nan_rsp_event_hdr->data_len > ((WMA_SVC_MSG_MAX_SIZE -
 	    WMI_TLV_HDR_SIZE - sizeof(*nan_rsp_event_hdr)) / sizeof(u_int8_t)) ||
 	    nan_rsp_event_hdr->data_len > param_buf->num_data)  {
-		WMA_LOGE("excess data length:%d", nan_rsp_event_hdr->data_len);
-		VOS_ASSERT(0);
+		WMA_LOGE("excess data length:%d, num_data:%d",
+			nan_rsp_event_hdr->data_len, param_buf->num_data);
 		return -EINVAL;
 	}
 	nan_rsp_event = (tSirNanEvent *) vos_mem_malloc(alloc_len);
@@ -8411,6 +8459,19 @@ static int wma_roam_synch_event_handler(void *handle, u_int8_t *event, u_int32_t
 	if (synch_event->vdev_id >= wma->max_bssid) {
 		WMA_LOGE("%s: received invalid vdev_id %d",
 			 __func__, synch_event->vdev_id);
+		return -EINVAL;
+	}
+
+	if (synch_event->bcn_probe_rsp_len >
+	    param_buf->num_bcn_probe_rsp_frame ||
+	    synch_event->reassoc_req_len >
+	    param_buf->num_reassoc_req_frame ||
+	    synch_event->reassoc_rsp_len >
+	    param_buf->num_reassoc_rsp_frame) {
+		WMA_LOGE("Invalid synch payload: LEN bcn:%d, req:%d, rsp:%d",
+			synch_event->bcn_probe_rsp_len,
+			synch_event->reassoc_req_len,
+			synch_event->reassoc_rsp_len);
 		return -EINVAL;
 	}
 
@@ -8830,7 +8891,8 @@ static int wma_stats_ext_event_handler(void *handle, u_int8_t *event_buf,
 	if (stats_ext_info->data_len > (WMA_SVC_MSG_MAX_SIZE -
 	    WMI_TLV_HDR_SIZE - sizeof(*stats_ext_info)) ||
 	    stats_ext_info->data_len > param_buf->num_data) {
-		WMA_LOGE("Excess data_len:%d", stats_ext_info->data_len);
+		WMA_LOGE("Excess data_len:%d, num_data:%d",
+			stats_ext_info->data_len, param_buf->num_data);
 		VOS_ASSERT(0);
 		return -EINVAL;
 	}
@@ -8980,6 +9042,7 @@ wma_chan_info_event_handler(void *handle, u_int8_t *event_buf,
 			return -EINVAL;
 		}
 		buf.tx_frame_count = event->tx_frame_cnt;
+		buf.rx_frame_count = event->rx_frame_count;
 		buf.clock_freq = event->mac_clk_mhz;
 		buf.cmd_flag = event->cmd_flags;
 		buf.freq = event->freq;
@@ -15373,22 +15436,22 @@ VOS_STATUS wma_vdev_start(tp_wma_handle wma,
 	   cmd->beacon_interval = req->beacon_intval;
 		cmd->dtim_period = req->dtim_period;
 
-      /* Copy the SSID */
-      if (req->ssid.length) {
-         if (req->ssid.length < sizeof(cmd->ssid.ssid))
-            cmd->ssid.ssid_len = req->ssid.length;
-         else
-            cmd->ssid.ssid_len = sizeof(cmd->ssid.ssid);
-         vos_mem_copy(cmd->ssid.ssid, req->ssid.ssId,
-                      cmd->ssid.ssid_len);
-      }
-
-      if (req->hidden_ssid)
-         cmd->flags |= WMI_UNIFIED_VDEV_START_HIDDEN_SSID;
-
       if (req->pmf_enabled)
          cmd->flags |= WMI_UNIFIED_VDEV_START_PMF_ENABLED;
    }
+
+	if (req->hidden_ssid)
+		cmd->flags |= WMI_UNIFIED_VDEV_START_HIDDEN_SSID;
+
+	/* Copy the SSID */
+	if (req->ssid.length) {
+		if (req->ssid.length < sizeof(cmd->ssid.ssid))
+			cmd->ssid.ssid_len = req->ssid.length;
+		else
+			cmd->ssid.ssid_len = sizeof(cmd->ssid.ssid);
+		vos_mem_copy(cmd->ssid.ssid, req->ssid.ssId,
+			     cmd->ssid.ssid_len);
+	}
 
 	cmd->num_noa_descriptors = 0;
 	buf_ptr = (u_int8_t *)(((uintptr_t) cmd) + sizeof(*cmd) +
@@ -15398,11 +15461,14 @@ VOS_STATUS wma_vdev_start(tp_wma_handle wma,
 		       sizeof(wmi_p2p_noa_descriptor));
 	WMA_LOGD("%s: vdev_id %d freq %d channel %d chanmode %d is_dfs %d "
 		 "beacon interval %d dtim %d center_chan %d center_freq2 %d "
-		 "reg_info_1: 0x%x reg_info_2: 0x%x, req->max_txpow: 0x%x",
+		 "reg_info_1: 0x%x reg_info_2: 0x%x, req->max_txpow: 0x%x"
+		 "cmd flags 0x%x ssid len %d",
 		 __func__, req->vdev_id, chan->mhz, req->chan, chanmode, req->is_dfs,
 		 req->beacon_intval, cmd->dtim_period, chan->band_center_freq1,
 		 chan->band_center_freq2, chan->reg_info_1, chan->reg_info_2,
-		 req->max_txpow);
+		 req->max_txpow, cmd->flags, cmd->ssid.ssid_len);
+
+
 
 	/* Store vdev params in SAP mode which can be used in vdev restart */
 	if (intr[req->vdev_id].type == WMI_VDEV_TYPE_AP &&
@@ -16094,7 +16160,12 @@ static void wma_set_channel(tp_wma_handle wma, tpSwitchChannelParams params)
 #endif
 	req.beacon_intval = 100;
 	req.dtim_period = 1;
-   req.is_dfs = params->isDfsChannel;
+	req.is_dfs = params->isDfsChannel;
+	req.hidden_ssid = params->ssidHidden;
+	req.ssid.length = params->ssid.length;
+	if (req.ssid.length > 0)
+		vos_mem_copy(req.ssid.ssId, params->ssid.ssId,
+			     params->ssid.length);
 
 	/* In case of AP mode, once radar is detected, we need to
 	 * issuse VDEV RESTART, so we making is_channel_switch as
@@ -16277,17 +16348,37 @@ static void wma_update_txrx_chainmask(int num_rf_chains, int *cmd_value)
 #define CFG_DATA_MASK              0x00FF
 
 /**
- * wma_mask_tx_ht_rate() - mask tx ht rate based on config
+ * wma_mask_tx_rate() - mask tx rate based on config
  * @wma:     wma handle
- * @mcs_set  mcs set buffer
+ * @supportedRates:   supported rate
  *
  * Return: None
  */
-static void wma_mask_tx_ht_rate(tp_wma_handle wma, uint8_t *mcs_set)
+static void wma_mask_tx_rate(tp_wma_handle wma,
+							tpSirSupportedRates supportedRates)
 {
-	uint32_t mcs_limit, i, j;
-	uint8_t *rate_pos = mcs_set;
+	uint32_t legacy_rate_mask, ht_rate_mask, mcs_limit, i, j;
+	uint8_t * mcs_rates = supportedRates->supportedMCSSet;
+	uint16_t * llb_rates = supportedRates->llbRates;
+	uint16_t * lla_rates = supportedRates->llaRates;
 
+	/* mask for Legacy rate */
+	if (wlan_cfgGetInt(wma->mac_context, WNI_CFG_MASK_TX_LEGACY_RATE,
+			   &legacy_rate_mask) != eSIR_SUCCESS) {
+		legacy_rate_mask = WNI_CFG_MASK_LEGACY_RATE_STADEF;
+	}
+
+	if (legacy_rate_mask) {
+		WMA_LOGD("%s: set legacy_rate_mask %x", __func__, legacy_rate_mask);
+		for (i = 0; i < SIR_NUM_11B_RATES; i++) {
+			if (legacy_rate_mask & (0x1<<i))
+				llb_rates[i] = 0;
+		}
+		for (i = 0; i < SIR_NUM_11A_RATES; i++) {
+			if ((legacy_rate_mask>>8) & (0x1<<i))
+				lla_rates[i] = 0;
+		}
+	}
 	/*
 	 * Get MCS limit from ini configure, and map it to rate parameters
 	 * This will limit HT rate upper bound. CFG_CTRL_MASK is used to
@@ -16301,26 +16392,39 @@ static void wma_mask_tx_ht_rate(tp_wma_handle wma, uint8_t *mcs_set)
 
 	if (mcs_limit & CFG_CTRL_MASK) {
 		WMA_LOGD("%s: set mcs_limit %x", __func__, mcs_limit);
-
 		mcs_limit &= CFG_DATA_MASK;
 		for (i = 0, j = 0; i < MAX_SUPPORTED_RATES;) {
 			if (j < mcs_limit / 8) {
-				rate_pos[j] = 0xff;
+				mcs_rates[j] = 0xff;
 				j++;
 				i += 8;
 			} else if (j < mcs_limit / 8 + 1) {
 				if (i <= mcs_limit)
-					rate_pos[i / 8] |= 1 << (i % 8);
+					mcs_rates[i / 8] |= 1 << (i % 8);
 				else
-					rate_pos[i / 8] &= ~(1 << (i % 8));
+					mcs_rates[i / 8] &= ~(1 << (i % 8));
 				i++;
 
 				if (i >= (j + 1) * 8)
 					j++;
 			} else {
-				rate_pos[j++] = 0;
+				mcs_rates[j++] = 0;
 				i += 8;
 			}
+		}
+	}
+
+	/* mask for HT rate */
+	if (wlan_cfgGetInt(wma->mac_context, WNI_CFG_MASK_TX_HT_RATE,
+			   &ht_rate_mask) != eSIR_SUCCESS) {
+		ht_rate_mask = WNI_CFG_MASK_HT_RATE_STADEF;
+	}
+
+	if (ht_rate_mask) {
+		WMA_LOGD("%s: set ht_rate_mask %x", __func__, ht_rate_mask);
+		for (i = 0; i< SIR_MAC_MAX_SUPPORTED_MCS_SET; i++) {
+			if (ht_rate_mask & (0x1 << i))
+				mcs_rates[i/8] &= ~(1<<(i%8));
 		}
 	}
 }
@@ -16375,7 +16479,7 @@ static int32_t wmi_unified_send_peer_assoc(tp_wma_handle wma,
 		}
 	}
 
-	wma_mask_tx_ht_rate(wma, params->supportedRates.supportedMCSSet);
+	wma_mask_tx_rate(wma, &params->supportedRates);
 
 	vos_mem_zero(&peer_legacy_rates, sizeof(wmi_rate_set));
 	vos_mem_zero(&peer_ht_rates, sizeof(wmi_rate_set));
@@ -17650,6 +17754,299 @@ static VOS_STATUS wma_send_thermal_mitigation_param_cmd_tlv(
 	return VOS_STATUS_SUCCESS;
 }
 
+#ifdef AUDIO_MULTICAST_AGGR_SUPPORT
+/**
+ * wma_add_multicast_group() - Add multicast aggregation group
+ * configuration params of multicast group to firmware
+ * @wma_handle: pointer to wma handle
+ * @multi_group: pointer to multicast group
+ *
+ * This is called to send Multicast group info to fw via WMI cmd
+ *
+ * Return: VOS_STATUS Success/Failure
+ */
+static VOS_STATUS
+wma_add_multicast_group(tp_wma_handle wma_handle,
+                         struct audio_multicast_group * multi_group)
+{
+    wmi_audio_aggr_add_group_cmd_fixed_param *cmd;
+    int status = 0;
+    wmi_buf_t buf;
+    u_int8_t *buf_ptr;
+    int32_t len = sizeof(wmi_audio_aggr_add_group_cmd_fixed_param);
+    wmi_mac_addr *pclient_addr;
+    int i;
+
+    if (!wma_handle || !wma_handle->wmi_handle) {
+        WMA_LOGE(FL("WMA is closed, can not issue cmd"));
+        return VOS_STATUS_E_INVAL;
+    }
+
+    len += WMI_TLV_HDR_SIZE;
+    len += (multi_group->client_num * sizeof(wmi_mac_addr));
+
+    buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+    if (!buf) {
+        WMA_LOGP(FL("wmi_buf_alloc failed"));
+        return -ENOMEM;
+    }
+    buf_ptr = (u_int8_t *) wmi_buf_data(buf);
+    cmd = (wmi_audio_aggr_add_group_cmd_fixed_param *) buf_ptr;
+    WMITLV_SET_HDR(&cmd->tlv_header,
+                   WMITLV_TAG_STRUC_wmi_audio_aggr_add_group,
+                   WMITLV_GET_STRUCT_TLVLEN(
+                   wmi_audio_aggr_add_group_cmd_fixed_param));
+
+    cmd->group_id = multi_group->group_id;
+    cmd->multicast_addr.mac_addr31to0 = multi_group->multicast_addr.mac_addr31to0;
+    cmd->multicast_addr.mac_addr47to32 = multi_group->multicast_addr.mac_addr47to32;
+
+    buf_ptr += sizeof(*cmd);
+    WMITLV_SET_HDR(buf_ptr, WMITLV_TAG_ARRAY_FIXED_STRUC,
+                               (multi_group->client_num * sizeof(wmi_mac_addr)));
+    buf_ptr += WMI_TLV_HDR_SIZE;
+    pclient_addr = (wmi_mac_addr *)(buf_ptr);
+    for(i=0; i < multi_group->client_num; i++) {
+        pclient_addr[i].mac_addr31to0 = multi_group->client_addr[i].mac_addr31to0;
+        pclient_addr[i].mac_addr47to32 = multi_group->client_addr[i].mac_addr47to32;
+    }
+    status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+                                  WMI_AUDIO_AGGR_ADD_GROUP_CMDID);
+    if (status != EOK) {
+        WMA_LOGE("%s: wmi_unified_cmd_send WMI_AUDIO_AGGR_ADD_GROUP_CMDID"
+                 " returned Error %d", __func__, status);
+        wmi_buf_free(buf);
+        return VOS_STATUS_E_FAILURE;
+    }
+    return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_set_multicast_rate() - set multicast aggregation rate
+ * configuration params of multicast group rate to firmware
+ * @wma_handle: pointer to wma handle
+ * @multi_group: pointer to multicast group
+ *
+ * This is called to send Multicast group rate info to fw via WMI cmd
+ *
+ * Return: VOS_STATUS Success/Failure
+ */
+static VOS_STATUS
+wma_set_multicast_rate(tp_wma_handle wma_handle,
+                         struct audio_multicast_group * multi_group)
+{
+    wmi_audio_aggr_set_group_rate_cmd_fixed_param *cmd;
+    int status = 0;
+    wmi_buf_t buf;
+    u_int8_t *buf_ptr;
+    int32_t len = sizeof(wmi_audio_aggr_set_group_rate_cmd_fixed_param);
+    WMI_AUDIO_AGGR_RATE_SET_T *pAggrRate;
+    int i;
+
+    if (!wma_handle || !wma_handle->wmi_handle) {
+        WMA_LOGE(FL("WMA is closed, can not issue cmd"));
+        return VOS_STATUS_E_INVAL;
+    }
+
+    len += WMI_TLV_HDR_SIZE;
+    len += (multi_group->num_rate_set* sizeof(WMI_AUDIO_AGGR_RATE_SET_T));
+
+    buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+    if (!buf) {
+        WMA_LOGP(FL("wmi_buf_alloc failed"));
+        return -ENOMEM;
+    }
+    buf_ptr = (u_int8_t *) wmi_buf_data(buf);
+    cmd = (wmi_audio_aggr_set_group_rate_cmd_fixed_param *) buf_ptr;
+    WMITLV_SET_HDR(&cmd->tlv_header,
+                   WMITLV_TAG_STRUC_wmi_audio_aggr_set_group_rate,
+                   WMITLV_GET_STRUCT_TLVLEN(
+                   wmi_audio_aggr_set_group_rate_cmd_fixed_param));
+
+    cmd->group_id = multi_group->group_id;
+    buf_ptr += sizeof(*cmd);
+    WMITLV_SET_HDR(buf_ptr, WMITLV_TAG_ARRAY_STRUC,
+                               (multi_group->num_rate_set* sizeof(WMI_AUDIO_AGGR_RATE_SET_T)));
+    buf_ptr += WMI_TLV_HDR_SIZE;
+
+    for (i=0; i<multi_group->num_rate_set; i++) {
+            pAggrRate = (WMI_AUDIO_AGGR_RATE_SET_T *)(buf_ptr);
+            pAggrRate->mcs = multi_group->rate_set[i].mcs;
+            pAggrRate->bandwidth = multi_group->rate_set[i].bandwith;
+            WMITLV_SET_HDR(&pAggrRate->tlv_header,
+                       WMITLV_TAG_STRUC_audio_aggr_rate_set,
+                       WMITLV_GET_STRUCT_TLVLEN(WMI_AUDIO_AGGR_RATE_SET_T));
+            buf_ptr += sizeof(WMI_AUDIO_AGGR_RATE_SET_T);
+			WMA_LOGE("%s:Set Rate mcs%d, bandwith%d", __func__,
+				pAggrRate->mcs, pAggrRate->bandwidth);
+    }
+
+    status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+                                  WMI_AUDIO_AGGR_SET_GROUP_RATE_CMDID);
+    if (status != EOK) {
+        WMA_LOGE("%s: wmi_unified_cmd_send WMI_AUDIO_AGGR_SET_GROUP_RATE_CMDID"
+                 " returned Error %d", __func__, status);
+        wmi_buf_free(buf);
+        return VOS_STATUS_E_FAILURE;
+    }
+    return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_set_multicast_retry_limit() - set multicast aggregation retry limit
+ * configuration params of multicast group rate to firmware
+ * @wma_handle: pointer to wma handle
+ * @group_id: group id
+ * @retry_limit:
+ *
+ * This is called to send Multicast group retry limit to fw via WMI cmd
+ *
+ * Return: VOS_STATUS Success/Failure
+ */
+static VOS_STATUS
+wma_set_multicast_retry_limit(tp_wma_handle wma_handle,
+                         int group_id, int retry_limit)
+{
+    wmi_audio_aggr_set_group_retry_cmd_fixed_param *cmd;
+    int status = 0;
+    wmi_buf_t buf;
+    u_int8_t *buf_ptr;
+    int32_t len = sizeof(wmi_audio_aggr_set_group_retry_cmd_fixed_param);
+
+    if (!wma_handle || !wma_handle->wmi_handle) {
+        WMA_LOGE(FL("WMA is closed, can not issue cmd"));
+        return VOS_STATUS_E_INVAL;
+    }
+
+    buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+    if (!buf) {
+        WMA_LOGP(FL("wmi_buf_alloc failed"));
+        return -ENOMEM;
+    }
+    buf_ptr = (u_int8_t *) wmi_buf_data(buf);
+    cmd = (wmi_audio_aggr_set_group_retry_cmd_fixed_param *) buf_ptr;
+    WMITLV_SET_HDR(&cmd->tlv_header,
+                   WMITLV_TAG_STRUC_wmi_audio_aggr_set_group_retry,
+                   WMITLV_GET_STRUCT_TLVLEN(
+                   wmi_audio_aggr_set_group_retry_cmd_fixed_param));
+
+    cmd->group_id = group_id;
+    cmd->retry_thresh= retry_limit;
+
+    status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+                                  WMI_AUDIO_AGGR_SET_GROUP_RETRY_CMDID);
+    if (status != EOK) {
+        WMA_LOGE("%s: wmi_unified_cmd_send WMI_AUDIO_AGGR_SET_GROUP_RETRY_CMDID"
+                 " returned Error %d", __func__, status);
+        wmi_buf_free(buf);
+        return VOS_STATUS_E_FAILURE;
+    }
+    return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_multicast_aggr_enable() - enable/disable multicast aggregation
+ * configuration params of multicast group rate to firmware
+ * @wma_handle: pointer to wma handle
+ * @aggr_enable: enable/disable multicast aggregation
+ * @tbd_enable: enable/disable time-based discard
+ *
+ * This is called to enable/disable Multicast aggregation via WMI cmd
+ *
+ * Return: VOS_STATUS Success/Failure
+ */
+static VOS_STATUS
+wma_multicast_aggr_enable(tp_wma_handle wma_handle,
+						 int aggr_enable, int tbd_enable)
+{
+	wmi_audio_aggr_enable_cmd_fixed_param *cmd;
+	int status = 0;
+	wmi_buf_t buf;
+	u_int8_t *buf_ptr;
+	int32_t len = sizeof(wmi_audio_aggr_enable_cmd_fixed_param);
+
+	if (!wma_handle || !wma_handle->wmi_handle) {
+		WMA_LOGE(FL("WMA is closed, can not issue cmd"));
+		return VOS_STATUS_E_INVAL;
+	}
+
+	buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+	if (!buf) {
+		WMA_LOGP(FL("wmi_buf_alloc failed"));
+		return -ENOMEM;
+	}
+	buf_ptr = (u_int8_t *) wmi_buf_data(buf);
+	cmd = (wmi_audio_aggr_enable_cmd_fixed_param *) buf_ptr;
+	WMITLV_SET_HDR(&cmd->tlv_header,
+				   WMITLV_TAG_STRUC_wmi_audio_aggr_enable_cmd_fixed_param,
+				   WMITLV_GET_STRUCT_TLVLEN(
+				   wmi_audio_aggr_enable_cmd_fixed_param));
+
+	cmd->aggr_enable = aggr_enable;
+	cmd->tbd_enable= tbd_enable;
+
+	status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+								   WMI_AUDIO_AGGR_ENABLE_CMDID);
+	if (status != EOK) {
+		WMA_LOGE("%s: wmi_unified_cmd_send WMI_AUDIO_AGGR_ENABLE_CMDID"
+				 " returned Error %d", __func__, status);
+		wmi_buf_free(buf);
+		return VOS_STATUS_E_FAILURE;
+	}
+	return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_multicast_del_group() - delete multicast aggregation group
+ * configuration params of multicast group rate to firmware
+ * @wma_handle: pointer to wma handle
+ * @group_id:the group id that would delete
+ *
+ * This is called to delete Multicast aggregation group via WMI cmd
+ *
+ * Return: VOS_STATUS Success/Failure
+ */
+static VOS_STATUS
+wma_multicast_del_group(tp_wma_handle wma_handle,
+						 int group_id)
+{
+	wmi_audio_aggr_del_group_cmd_fixed_param *cmd;
+	int status = 0;
+	wmi_buf_t buf;
+	u_int8_t *buf_ptr;
+	int32_t len = sizeof(wmi_audio_aggr_del_group_cmd_fixed_param);
+
+	if (!wma_handle || !wma_handle->wmi_handle) {
+		WMA_LOGE(FL("WMA is closed, can not issue cmd"));
+		return VOS_STATUS_E_INVAL;
+	}
+
+	buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+	if (!buf) {
+		WMA_LOGP(FL("wmi_buf_alloc failed"));
+		return -ENOMEM;
+	}
+	buf_ptr = (u_int8_t *) wmi_buf_data(buf);
+	cmd = (wmi_audio_aggr_del_group_cmd_fixed_param *) buf_ptr;
+	WMITLV_SET_HDR(&cmd->tlv_header,
+				   WMITLV_TAG_STRUC_wmi_audio_aggr_del_group,
+				   WMITLV_GET_STRUCT_TLVLEN(
+				   wmi_audio_aggr_del_group_cmd_fixed_param));
+
+	cmd->group_id= group_id;
+
+	status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+								   WMI_AUDIO_AGGR_DEL_GROUP_CMDID);
+	if (status != EOK) {
+		WMA_LOGE("%s: wmi_unified_cmd_send WMI_AUDIO_AGGR_DEL_GROUP_CMDID"
+				 " returned Error %d", __func__, status);
+		wmi_buf_free(buf);
+		return VOS_STATUS_E_FAILURE;
+	}
+	return VOS_STATUS_SUCCESS;
+}
+#endif
+
 static void wma_process_cli_set_cmd(tp_wma_handle wma,
 				    wda_cli_set_cmd_t *privcmd)
 {
@@ -17783,6 +18180,20 @@ static void wma_process_cli_set_cmd(tp_wma_handle wma,
 		case GEN_PDEV_MONITOR_MODE:
 			wma_send_pdev_monitor_mode_cmd(wma, privcmd);
 			break;
+#ifdef AUDIO_MULTICAST_AGGR_SUPPORT
+		case GEN_PARAM_MULTICAST_RETRY_LIMIT:
+			wma_set_multicast_retry_limit(wma,
+				privcmd->param_value, privcmd->param_sec_value);
+			break;
+		case GEN_PARAM_MULTICAST_AGGR_ENABLED:
+			wma_multicast_aggr_enable(wma,
+				privcmd->param_value, privcmd->param_sec_value);
+			break;
+		case GEN_PARAM_MULTICAST_DEL_GROUP:
+			wma_multicast_del_group(wma,
+				privcmd->param_value);
+			break;
+#endif
 		default:
 			WMA_LOGE("Invalid param id 0x%x", privcmd->param_id);
 			break;
@@ -23803,8 +24214,10 @@ static int wma_log_supported_evt_handler(void *handle,
 	}
 
 	/* Free any previous allocation */
-	if (wma->events_logs_list)
+	if (wma->events_logs_list) {
 		vos_mem_free(wma->events_logs_list);
+		wma->events_logs_list = NULL;
+	}
 
 	/* Store the event list for run time enable/disable */
 	wma->events_logs_list = vos_mem_malloc(num_of_diag_events_logs *
@@ -26269,6 +26682,7 @@ static bool wma_is_wow_prtn_cached(tp_wma_handle wma, u_int8_t vdev_id)
 static void wma_unpause_vdev(tp_wma_handle wma) {
 	int8_t vdev_id;
 	struct wma_txrx_node *iface;
+	int i, tmp_reason;
 
 	for (vdev_id = 0; vdev_id < wma->max_bssid; vdev_id++) {
 		if (!wma->interfaces[vdev_id].handle)
@@ -26277,8 +26691,14 @@ static void wma_unpause_vdev(tp_wma_handle wma) {
 #if defined(CONFIG_HL_SUPPORT) || defined(QCA_SUPPORT_TXRX_VDEV_PAUSE_LL)
 	/* When host resume, by default, unpause all active vdev */
 		if (wma->interfaces[vdev_id].pause_bitmap) {
-			wdi_in_vdev_unpause(wma->interfaces[vdev_id].handle,
-					    0xffffffff);
+			for (i = 0; i < sizeof(wma->interfaces[vdev_id].pause_bitmap); i++) {
+				tmp_reason = 1 << i;
+				if (wma->interfaces[vdev_id].pause_bitmap & tmp_reason) {
+					WMA_LOGD("%s: unpause reason %d", __func__, tmp_reason);
+					wdi_in_vdev_unpause(wma->interfaces[vdev_id].handle,
+							    tmp_reason);
+				}
+			}
 			wma->interfaces[vdev_id].pause_bitmap = 0;
 		}
 #endif /* QCA_SUPPORT_TXRX_VDEV_PAUSE_LL || CONFIG_HL_SUPPORT */
@@ -27278,8 +27698,8 @@ static VOS_STATUS wma_apfind_set_cmd(void *wda_handle,
 	tp_wma_handle wma_handle = (tp_wma_handle)wda_handle;
 	wmi_apfind_cmd_param *cmd;
 	wmi_buf_t buf;
-	u_int16_t len = sizeof(*cmd);
-	u_int16_t apfind_data_len, apfind_data_len_aligned;
+	size_t len = sizeof(*cmd);
+	size_t apfind_data_len, apfind_data_len_aligned;
 	u_int8_t *buf_ptr;
 
 	if (!apfind_req) {
@@ -35822,6 +36242,28 @@ VOS_STATUS wma_mc_process_msg(v_VOID_t *vos_context, vos_msg_t *msg)
 		case WDA_SET_RX_ANTENNA:
 			wma_set_rx_antanna(wma_handle, 0, msg->bodyval);
 			break;
+		case WDA_SET_GPIO_CFG:
+			wma_set_gpio_cfg(wma_handle,
+					 (struct hal_gpio_cfg *)msg->bodyptr);
+			vos_mem_free(msg->bodyptr);
+			break;
+		case WDA_SET_GPIO_OUTPUT:
+			wma_set_gpio_output(wma_handle,
+				(struct hal_gpio_output *)msg->bodyptr);
+			vos_mem_free(msg->bodyptr);
+			break;
+#ifdef AUDIO_MULTICAST_AGGR_SUPPORT
+		case WDA_ADD_MULTICAST_GROUP:
+			wma_add_multicast_group(wma_handle,
+						  (struct audio_multicast_group *) msg->bodyptr);
+			vos_mem_free(msg->bodyptr);
+			break;
+		case WDA_SET_MULTICAST_RATE:
+			wma_set_multicast_rate(wma_handle,
+						  (struct audio_multicast_group *) msg->bodyptr);
+			vos_mem_free(msg->bodyptr);
+			break;
+#endif
 		default:
 			WMA_LOGD("unknow msg type %x", msg->type);
 			/* Do Nothing? MSG Body should be freed at here */
@@ -36924,7 +37366,11 @@ static int wma_channel_avoid_evt_handler(void *handle, u_int8_t *event,
 
 	num_freq_ranges = (afr_fixed_param->num_freq_ranges > SIR_CH_AVOID_MAX_RANGE)?
 				SIR_CH_AVOID_MAX_RANGE:afr_fixed_param->num_freq_ranges;
-
+	if (num_freq_ranges > param_buf->num_avd_freq_range) {
+		WMA_LOGE("Invalid num_freq_ranges %d, avd_freq_range %d",
+			num_freq_ranges, param_buf->num_avd_freq_range);
+		return -EINVAL;
+	}
 	WMA_LOGD("Channel avoid event received with %d ranges", num_freq_ranges);
 	for (freq_range_idx = 0; freq_range_idx < num_freq_ranges; freq_range_idx++) {
 			afr_desc = (wmi_avoid_freq_range_desc *) ((void *)param_buf->avd_freq_range
@@ -42378,6 +42824,7 @@ VOS_STATUS wma_set_rx_antanna(void *handle,
 	WMITLV_SET_HDR(&cmd->tlv_header, tag, len);
 	cmd->pdev_id = pdev_id;
 	cmd->rx_antenna = matrix;
+	WMA_LOGD("Send rx antenna(0x%8x)", matrix);
 	status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf,
 				      sizeof(*cmd),
 				      WMI_PDEV_SMART_ANT_SET_RX_ANTENNA_CMDID);
@@ -42387,4 +42834,164 @@ VOS_STATUS wma_set_rx_antanna(void *handle,
 		return VOS_STATUS_E_FAILURE;
 	}
 	return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_set_gpio_cfg() - Set GPIO config
+ * @handle: pointer to wma handle
+ * @gpio_cfg: parameters for GPIO config
+ *
+ * Return: VOS_STATUS_SUCCESS for success.
+ */
+VOS_STATUS wma_set_gpio_cfg(void *handle, struct hal_gpio_cfg *gpio_cfg)
+{
+	tp_wma_handle wma_handle;
+	wmi_buf_t buf;
+	int status;
+	uint32_t tag;
+	wmi_gpio_config_cmd_fixed_param *cmd;
+	int len = sizeof(*cmd);
+
+	if (!handle) {
+		WMA_LOGP(FL("Invalid handle."));
+		return VOS_STATUS_E_INVAL;
+	}
+
+	wma_handle = handle;
+	buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+	if (!buf) {
+		WMA_LOGP("%s: failed to allocate memory for WMI_GPIO_CONFIG_CMDID",
+			 __func__);
+		return VOS_STATUS_E_NOMEM;
+	}
+
+	cmd = (wmi_gpio_config_cmd_fixed_param *)wmi_buf_data(buf);
+	tag = WMITLV_TAG_STRUC_wmi_gpio_config_cmd_fixed_param;
+	len = WMITLV_GET_STRUCT_TLVLEN(wmi_gpio_config_cmd_fixed_param);
+	WMITLV_SET_HDR(&cmd->tlv_header, tag, len);
+	cmd->gpio_num = gpio_cfg->gpio_num;
+	cmd->input = gpio_cfg->input;
+	cmd->intr_mode = gpio_cfg->intr_mode;
+	cmd->mux_config_val = gpio_cfg->mux_config_val;
+	status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf,
+				      sizeof(*cmd),
+				      WMI_GPIO_CONFIG_CMDID);
+	if (status) {
+		WMA_LOGE("Failed to send WMI_GPIO_CONFIG_CMDID");
+		wmi_buf_free(buf);
+		return VOS_STATUS_E_FAILURE;
+	}
+	return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_set_gpio_cfg() - Set GPIO config
+ * @handle: pointer to wma handle
+ * @output: parameters for GPIO output
+ *
+ * Return: VOS_STATUS_SUCCESS for success.
+ */
+VOS_STATUS wma_set_gpio_output(void *handle, struct hal_gpio_output *output)
+{
+	tp_wma_handle wma_handle;
+	wmi_buf_t buf;
+	int status;
+	uint32_t tag;
+	wmi_gpio_output_cmd_fixed_param *cmd;
+	int len = sizeof(*cmd);
+
+	if (!handle) {
+		WMA_LOGP(FL("Invalid handle."));
+		return VOS_STATUS_E_INVAL;
+	}
+
+	wma_handle = handle;
+	buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+	if (!buf) {
+		WMA_LOGP("%s: failed to allocate memory for WMI_GPIO_OUTPUT_CMDID",
+			 __func__);
+		return VOS_STATUS_E_NOMEM;
+	}
+
+	cmd = (wmi_gpio_output_cmd_fixed_param *)wmi_buf_data(buf);
+	tag = WMITLV_TAG_STRUC_wmi_gpio_output_cmd_fixed_param;
+	len = WMITLV_GET_STRUCT_TLVLEN(wmi_gpio_output_cmd_fixed_param);
+	WMITLV_SET_HDR(&cmd->tlv_header, tag, len);
+	cmd->gpio_num = output->gpio_num;
+	cmd->set = output->set;
+	status = wmi_unified_cmd_send(wma_handle->wmi_handle, buf,
+				      sizeof(*cmd),
+				      WMI_GPIO_OUTPUT_CMDID);
+	if (status) {
+		WMA_LOGE("Failed to send WMI_GPIO_OUTPUT_CMDID");
+		wmi_buf_free(buf);
+		return VOS_STATUS_E_FAILURE;
+	}
+	return VOS_STATUS_SUCCESS;
+}
+
+/**
+ * wma_set_wlm_latency_level() - set latency level
+ * @vdev_id: vdev id
+ * @value: value
+ *
+ * Return: CDF_STATUS_SUCCESS for success or error code.
+ */
+VOS_STATUS wma_set_wlm_latency_level(uint8_t vdev_id, uint16_t latency_level)
+{
+	void *vos_context = vos_get_global_context(VOS_MODULE_ID_WDA, NULL);
+	VOS_STATUS ret;
+	wmi_buf_t buf;
+	wmi_wlm_config_cmd_fixed_param *cmd;
+	uint32_t len = sizeof(*cmd);
+	static uint32_t ll[4] = {100, 60, 40, 20};
+	tp_wma_handle wma_handle = (tp_wma_handle) vos_get_context(
+					VOS_MODULE_ID_WDA, vos_context);
+	tpAniSirGlobal mac_ctx;
+	if (NULL == wma_handle) {
+		WMA_LOGE("%s: wma_handle is NULL", __func__);
+		return VOS_STATUS_E_FAILURE;
+	}
+
+	mac_ctx = (tpAniSirGlobal)vos_get_context(
+			VOS_MODULE_ID_PE, wma_handle->vos_context);
+
+	if (!mac_ctx) {
+		WMA_LOGE("%s: Failed to get mac_ctx", __func__);
+		return VOS_STATUS_E_FAILURE;
+	}
+
+	if (!(wma_handle->interfaces[vdev_id].vdev_up)) {
+		WMA_LOGE("%s: vdev id %d is not up", __func__, vdev_id);
+		return VOS_STATUS_E_FAILURE;
+	}
+
+	if (!mac_ctx->roam.configParam.wlm_latency_enable) {
+		WMA_LOGE("%s: WLM latency level setting is disabled",
+			   __func__);
+		return VOS_STATUS_E_FAILURE;
+	}
+
+	buf = wmi_buf_alloc(wma_handle->wmi_handle, len);
+	if (!buf) {
+		WMA_LOGE("%s: wmi_buf_alloc failed", __func__);
+		return VOS_STATUS_E_NOMEM;
+	}
+	cmd = (wmi_wlm_config_cmd_fixed_param *)wmi_buf_data(buf);
+	WMITLV_SET_HDR(&cmd->tlv_header,
+		       WMITLV_TAG_STRUC_wmi_wlm_config_cmd_fixed_param,
+		       WMITLV_GET_STRUCT_TLVLEN
+		       (wmi_wlm_config_cmd_fixed_param));
+	cmd->vdev_id = vdev_id;
+	cmd->latency_level = latency_level;
+	cmd->ul_latency = ll[latency_level];
+	cmd->dl_latency = ll[latency_level];
+	cmd->flags = mac_ctx->roam.configParam.wlm_latency_flags[latency_level];
+
+	ret = wmi_unified_cmd_send(wma_handle->wmi_handle, buf, len,
+					WMI_WLM_CONFIG_CMDID);
+	if (ret != VOS_STATUS_SUCCESS)
+		WMA_LOGE("Decrease tx power value failed");
+
+	return ret;
 }

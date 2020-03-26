@@ -3817,6 +3817,8 @@ static void transfer_busy_time(struct rq *rq, struct related_thread_group *grp,
 		dst_nt_curr_runnable_sum = &rq->nt_curr_runnable_sum;
 		src_nt_prev_runnable_sum = &cpu_time->nt_prev_runnable_sum;
 		dst_nt_prev_runnable_sum = &rq->nt_prev_runnable_sum;
+	} else {
+		return;
 	}
 
 	*src_curr_runnable_sum -= p->ravg.curr_window;
@@ -5031,6 +5033,28 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		goto out;
 
 	success = 1; /* we're going to change ->state */
+	/*
+	 * Ensure we load p->on_rq _after_ p->state, otherwise it would
+	 * be possible to, falsely, observe p->on_rq == 0 and get stuck
+	 * in smp_cond_load_acquire() below.
+	 *
+	 * sched_ttwu_pending()                 try_to_wake_up()
+	 *   [S] p->on_rq = 1;                  [L] P->state
+	 *       UNLOCK rq->lock  -----.
+	 *                              \
+	 *				 +---   RMB
+	 * schedule()                   /
+	 *       LOCK rq->lock    -----'
+	 *       UNLOCK rq->lock
+	 *
+	 * [task p]
+	 *   [S] p->state = UNINTERRUPTIBLE     [L] p->on_rq
+	 *
+	 * Pairs with the UNLOCK+LOCK on rq->lock from the
+	 * last wakeup of our task and the schedule that got our task
+	 * current.
+	 */
+	smp_rmb();
 
 	/*
 	 * Ensure we load p->on_rq _after_ p->state, otherwise it would
@@ -5058,6 +5082,25 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		goto stat;
 
 #ifdef CONFIG_SMP
+	/*
+	 * Ensure we load p->on_cpu _after_ p->on_rq, otherwise it would be
+	 * possible to, falsely, observe p->on_cpu == 0.
+	 *
+	 * One must be running (->on_cpu == 1) in order to remove oneself
+	 * from the runqueue.
+	 *
+	 *  [S] ->on_cpu = 1;	[L] ->on_rq
+	 *      UNLOCK rq->lock
+	 *			RMB
+	 *      LOCK   rq->lock
+	 *  [S] ->on_rq = 0;    [L] ->on_cpu
+	 *
+	 * Pairs with the full barrier implied in the UNLOCK+LOCK on rq->lock
+	 * from the consecutive calls to schedule(); the first switching to our
+	 * task, the second putting it to sleep.
+	 */
+	smp_rmb();
+
 	/*
 	 * If the owning (remote) cpu is still in the middle of schedule() with
 	 * this task as prev, wait until its done referencing the task.
@@ -5272,10 +5315,6 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	memset(&p->se.statistics, 0, sizeof(p->se.statistics));
 #endif
 
-#ifdef CONFIG_CPU_FREQ_STAT
-	cpufreq_task_stats_init(p);
-#endif
-
 	RB_CLEAR_NODE(&p->dl.rb_node);
 	hrtimer_init(&p->dl.dl_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	__dl_clear_params(p);
@@ -5364,12 +5403,11 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	unsigned long flags;
 	int cpu = get_cpu();
 
-	__sched_fork(clone_flags, p);
-
 #ifdef CONFIG_CPU_FREQ_STAT
-	cpufreq_task_stats_alloc(p);
+	cpufreq_task_stats_init(p);
 #endif
 
+	__sched_fork(clone_flags, p);
 	/*
 	 * We mark the process as running here. This guarantees that
 	 * nobody will actually run it, and a signal or other external
@@ -7941,34 +7979,23 @@ EXPORT_SYMBOL_GPL(yield_to);
  * This task is about to go to sleep on IO. Increment rq->nr_iowait so
  * that process accounting knows that this is a task in IO wait state.
  */
-void __sched io_schedule(void)
-{
-	struct rq *rq = raw_rq();
-
-	delayacct_blkio_start();
-	atomic_inc(&rq->nr_iowait);
-	blk_flush_plug(current);
-	current->in_iowait = 1;
-	schedule();
-	current->in_iowait = 0;
-	atomic_dec(&rq->nr_iowait);
-	delayacct_blkio_end();
-}
-EXPORT_SYMBOL(io_schedule);
-
 long __sched io_schedule_timeout(long timeout)
 {
-	struct rq *rq = raw_rq();
+	int old_iowait = current->in_iowait;
+	struct rq *rq;
 	long ret;
 
-	delayacct_blkio_start();
-	atomic_inc(&rq->nr_iowait);
-	blk_flush_plug(current);
 	current->in_iowait = 1;
+	blk_schedule_flush_plug(current);
+
+	delayacct_blkio_start();
+	rq = raw_rq();
+	atomic_inc(&rq->nr_iowait);
 	ret = schedule_timeout(timeout);
-	current->in_iowait = 0;
+	current->in_iowait = old_iowait;
 	atomic_dec(&rq->nr_iowait);
 	delayacct_blkio_end();
+
 	return ret;
 }
 EXPORT_SYMBOL(io_schedule_timeout);
@@ -9403,6 +9430,9 @@ enum s_alloc {
  * Build an iteration mask that can exclude certain CPUs from the upwards
  * domain traversal.
  *
+ * Only CPUs that can arrive at this group should be considered to continue
+ * balancing.
+ *
  * Asymmetric node setups can result in situations where the domain tree is of
  * unequal depth, make sure to skip domains that already cover the entire
  * range.
@@ -9414,18 +9444,31 @@ enum s_alloc {
  */
 static void build_group_mask(struct sched_domain *sd, struct sched_group *sg)
 {
-	const struct cpumask *span = sched_domain_span(sd);
+	const struct cpumask *sg_span = sched_group_cpus(sg);
 	struct sd_data *sdd = sd->private;
 	struct sched_domain *sibling;
 	int i;
 
-	for_each_cpu(i, span) {
+	for_each_cpu(i, sg_span) {
 		sibling = *per_cpu_ptr(sdd->sd, i);
-		if (!cpumask_test_cpu(i, sched_domain_span(sibling)))
+
+		/*
+		 * Can happen in the asymmetric case, where these siblings are
+		 * unused. The mask will not be empty because those CPUs that
+		 * do have the top domain _should_ span the domain.
+		 */
+		if (!sibling->child)
+			continue;
+
+		/* If we would not end up here, we can't continue from here */
+		if (!cpumask_equal(sg_span, sched_domain_span(sibling->child)))
 			continue;
 
 		cpumask_set_cpu(i, sched_group_mask(sg));
 	}
+
+	/* We must not have empty masks here */
+	WARN_ON_ONCE(cpumask_empty(sched_group_mask(sg)));
 }
 
 /*
@@ -11543,10 +11586,6 @@ static int cpu_cgroup_can_attach(struct cgroup_subsys_state *css,
 #ifdef CONFIG_RT_GROUP_SCHED
 		if (!sched_rt_can_attach(css_tg(css), task))
 			return -EINVAL;
-#else
-		/* We don't support RT-tasks being in separate groups */
-		if (task->sched_class != &fair_sched_class)
-			return -EINVAL;
 #endif
 	}
 	return 0;
@@ -11637,6 +11676,8 @@ static int cpu_upmigrate_discourage_write_u64(struct cgroup_subsys_state *css,
 static int cpu_shares_write_u64(struct cgroup_subsys_state *css,
 				struct cftype *cftype, u64 shareval)
 {
+	if (shareval > scale_load_down(ULONG_MAX))
+		shareval = MAX_SHARES;
 	return sched_group_set_shares(css_tg(css), scale_load(shareval));
 }
 
@@ -11738,8 +11779,10 @@ int tg_set_cfs_quota(struct task_group *tg, long cfs_quota_us)
 	period = ktime_to_ns(tg->cfs_bandwidth.period);
 	if (cfs_quota_us < 0)
 		quota = RUNTIME_INF;
-	else
+	else if ((u64)cfs_quota_us <= U64_MAX / NSEC_PER_USEC)
 		quota = (u64)cfs_quota_us * NSEC_PER_USEC;
+	else
+		return -EINVAL;
 
 	return tg_set_cfs_bandwidth(tg, period, quota);
 }
@@ -11760,6 +11803,9 @@ long tg_get_cfs_quota(struct task_group *tg)
 int tg_set_cfs_period(struct task_group *tg, long cfs_period_us)
 {
 	u64 quota, period;
+
+	if ((u64)cfs_period_us > U64_MAX / NSEC_PER_USEC)
+		return -EINVAL;
 
 	period = (u64)cfs_period_us * NSEC_PER_USEC;
 	quota = tg->cfs_bandwidth.quota;

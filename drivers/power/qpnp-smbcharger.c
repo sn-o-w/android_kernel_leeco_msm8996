@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2715,6 +2715,8 @@ static void smbchg_parallel_usb_enable(struct smbchg_chip *chip,
 			"Couldn't set Vflt on parallel psy rc: %d\n", rc);
 		return;
 	}
+	power_supply_set_voltage_limit(chip->usb_psy,
+			(chip->vfloat_mv + 50) * 1000);
 	/* Set USB ICL */
 	target_icl_ma = get_effective_result_locked(chip->usb_icl_votable);
 	if (target_icl_ma < 0) {
@@ -4362,8 +4364,11 @@ static int smbchg_float_voltage_set(struct smbchg_chip *chip, int vfloat_mv)
 
 	if (rc)
 		dev_err(chip->dev, "Couldn't set float voltage rc = %d\n", rc);
-	else
+	else {
 		chip->vfloat_mv = vfloat_mv;
+		power_supply_set_voltage_limit(chip->usb_psy,
+				chip->vfloat_mv * 1000);
+	}
 
 	return rc;
 }
@@ -7564,6 +7569,7 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		val->intval = get_prop_batt_current_now(chip);
+		val->intval *= (-1);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = get_prop_batt_voltage_now(chip);

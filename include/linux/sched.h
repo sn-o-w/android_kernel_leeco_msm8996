@@ -349,9 +349,6 @@ extern void show_regs(struct pt_regs *);
  */
 extern void show_stack(struct task_struct *task, unsigned long *sp);
 
-void io_schedule(void);
-long io_schedule_timeout(long timeout);
-
 extern void cpu_init (void);
 extern void trap_init(void);
 extern void update_process_times(int user);
@@ -407,6 +404,13 @@ extern signed long schedule_timeout_killable(signed long timeout);
 extern signed long schedule_timeout_uninterruptible(signed long timeout);
 asmlinkage void schedule(void);
 extern void schedule_preempt_disabled(void);
+
+extern long io_schedule_timeout(long timeout);
+
+static inline void io_schedule(void)
+{
+	io_schedule_timeout(MAX_SCHEDULE_TIMEOUT);
+}
 
 struct nsproxy;
 struct user_namespace;
@@ -1757,16 +1761,19 @@ struct task_struct {
 	/* bitmask and counter of trace recursion */
 	unsigned long trace_recursion;
 #endif /* CONFIG_TRACING */
-#ifdef CONFIG_KCOV
-	/* Coverage collection mode enabled for this task (0 if disabled). */
-	enum kcov_mode kcov_mode;
-	/* Size of the kcov_area. */
-	unsigned	kcov_size;
-	/* Buffer for coverage collection. */
-	void		*kcov_area;
-	/* kcov desciptor wired with this task or NULL. */
-	struct kcov	*kcov;
-#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #ifdef CONFIG_MEMCG /* memcg uses this to do batch job */
 	unsigned int memcg_kmem_skip_account;
@@ -1784,8 +1791,6 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
-	atomic64_t *concurrent_active_time;
-	atomic64_t *concurrent_policy_time;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */

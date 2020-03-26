@@ -897,6 +897,7 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 			cmd_data = d_cmd->data;
 			kfree(d_cmd);
 		} else {
+			memset(&cmd, 0, sizeof(cmd));
 			fifo_read(einfo, &cmd, sizeof(cmd));
 			cmd_data = NULL;
 		}
@@ -999,6 +1000,7 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 								cmd_data)->size;
 					kfree(cmd_data);
 				} else {
+					memset(&intent, 0, sizeof(intent));
 					fifo_read(einfo, &intent,
 								sizeof(intent));
 				}
@@ -2166,6 +2168,7 @@ static int parse_qos_dt_params(struct device_node *node,
 	for (i = 0; i < num_states; i++)
 		einfo->ramp_time_us[i] = arr32[i];
 
+	kfree(arr32);
 	rc = 0;
 	return rc;
 

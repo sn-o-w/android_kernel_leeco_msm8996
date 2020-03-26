@@ -171,6 +171,13 @@ ifeq ($(KERNEL_BUILD), 0)
 
 endif
 
+ifeq ($(CONFIG_ARCH_QCS405), y)
+	CONFIG_TXRX_PERF := y
+	CONFIG_NON_QC_PLATFORM := n
+	CONFIG_CUSTOMIZE_SDIO_CCCR_VALUE := y
+	CONFIG_MULTI_IF_LOG := y
+endif
+
 #Enable Power debugfs feature only if debug_fs is enabled
 ifeq ($(CONFIG_DEBUG_FS), y)
 CONFIG_WLAN_POWER_DEBUGFS := y
@@ -198,7 +205,7 @@ CONFIG_WLAN_FEATURE_SAE := y
 # Feature flags which are not (currently) configurable via Kconfig
 
 #Whether to build debug version
-BUILD_DEBUG_VERSION := 1
+BUILD_DEBUG_VERSION := 0
 
 #Enable this flag to build driver in diag version
 BUILD_DIAG_VERSION := 1
@@ -1050,6 +1057,8 @@ endif
 
 EXTRA_CFLAGS += $(INCS)
 
+EXTRA_CFLAGS += -Wno-unused-function -Wno-unused-variable
+
 CDEFINES :=	-DANI_LITTLE_BYTE_ENDIAN \
 		-DANI_LITTLE_BIT_ENDIAN \
 		-DQC_WLAN_CHIPSET_QCA_CLD \
@@ -1105,6 +1114,26 @@ CDEFINES :=	-DANI_LITTLE_BYTE_ENDIAN \
 
 ifeq ($(CONFIG_WLAN_POWER_DEBUGFS), y)
 CDEFINES += -DWLAN_POWER_DEBUGFS
+endif
+
+ifeq ($(CONFIG_CUSTOMIZE_SDIO_CCCR_VALUE), y)
+CDEFINES += -DCCCR1=0x15
+CDEFINES += -DCCCR1_VALUE=0x30
+CDEFINES += -DCCCR2=0xf2
+CDEFINES += -DCCCR2_VALUE=0x0f
+CDEFINES += -DCCCR3=0xf1
+CDEFINES += -DCCCR3_VALUE=0xa8
+CDEFINES += -DCCCR4=0xf0
+CDEFINES += -DCCCR4_VALUE=0x81
+else
+CDEFINES += -DCCCR1=0
+CDEFINES += -DCCCR1_VALUE=0
+CDEFINES += -DCCCR2=0
+CDEFINES += -DCCCR2_VALUE=0
+CDEFINES += -DCCCR3=0
+CDEFINES += -DCCCR3_VALUE=0
+CDEFINES += -DCCCR4=0
+CDEFINES += -DCCCR4_VALUE=0
 endif
 
 ifeq ($(CONFIG_FEATURE_COEX_PTA_CONFIG_ENABLE), y)
@@ -1272,7 +1301,9 @@ endif
 ifeq ($(CONFIG_SLUB_DEBUG_ON),y)
 CDEFINES += -DTIMER_MANAGER
 CDEFINES += -DMEMORY_DEBUG
+ifneq ($(CONFIG_ROME_IF), sdio)
 CDEFINES += -DNBUF_MAP_UNMAP_DEBUG
+endif
 endif
 
 ifeq ($(HAVE_CFG80211),1)
@@ -1779,6 +1810,8 @@ ifeq ($(CONFIG_WLAN_WOW_PULSE), y)
 CDEFINES += -DWLAN_FEATURE_WOW_PULSE
 endif
 
+CDEFINES += -DAUDIO_MULTICAST_AGGR_SUPPORT
+
 #Enable Pattern Bitmap Match & Magic Pattern WOW
 ifeq ($(CONFIG_PBM_MAGIC_WOW), y)
 CDEFINES += -DWLAN_FEATURE_WOW_PULSE
@@ -1800,8 +1833,17 @@ endif
 ifeq ($(CONFIG_VOS_MEM_PRE_ALLOC),y)
 ifneq ($(CONFIG_WCNSS_MEM_PRE_ALLOC), y)
 CDEFINES += -DCONFIG_VOS_MEM_PRE_ALLOC
+
+ifeq ($(CONFIG_FEATURE_LARGE_PREALLOC),y)
+CDEFINES += -DFEATURE_LARGE_PREALLOC
+obj-m += $(MODNAME).o
+$(MODNAME)-y += $(HDD_SRC_DIR)/wlan_hdd_main_module.o
+OBJS +=$(VOSS_SRC_DIR)/vos_memory_prealloc.o
+else
 obj-m += wlan_prealloc.o
 wlan_prealloc-y += $(VOSS_SRC_DIR)/vos_memory_prealloc.o
+endif
+
 endif
 endif
 
@@ -1836,14 +1878,6 @@ endif
 
 KBUILD_CPPFLAGS += $(CDEFINES)
 
-# Currently, for versions of gcc which support it, the kernel Makefile
-# is disabling the maybe-uninitialized warning.  Re-enable it for the
-# WLAN driver.  Note that we must use EXTRA_CFLAGS here so that it
-# will override the kernel settings.
-ifeq ($(call cc-option-yn, -Wmaybe-uninitialized),y)
-EXTRA_CFLAGS += -Wmaybe-uninitialized
-endif
-
 ifeq ($(call cc-option-yn, -Wheader-guard),y)
 EXTRA_CFLAGS += -Wheader-guard
 endif
@@ -1857,6 +1891,19 @@ endif
 ifneq ($(MODNAME), wlan)
 CHIP_NAME ?= $(MODNAME)
 CDEFINES += -DMULTI_IF_NAME=\"$(CHIP_NAME)\"
+ifeq ($(CONFIG_ARCH_QCS405), y)
+CDEFINES += -DIFNAME_SUFFIX=\"tf\"
+CDEFINES += -DIFNAME_SUFFIX_SIZE=2
+else
+CDEFINES += -DIFNAME_SUFFIX=\"\"
+CDEFINES += -DIFNAME_SUFFIX_SIZE=0
+endif
+ifeq ($(CONFIG_MULTI_IF_LOG), y)
+CDEFINES += -DMULTI_IF_LOG
+endif
+else
+CDEFINES += -DIFNAME_SUFFIX=\"\"
+CDEFINES += -DIFNAME_SUFFIX_SIZE=0
 endif
 
 # WLAN_HDD_ADAPTER_MAGIC must be unique for all instances of the driver on the
@@ -1872,5 +1919,10 @@ CDEFINES += -DWLAN_SMART_ANTENNA_FEATURE
 endif
 
 # Module information used by KBuild framework
+ifeq ($(CONFIG_FEATURE_LARGE_PREALLOC),y)
+obj-$(CONFIG_QCA_CLD_WLAN) += wlan_prealloc.o
+wlan_prealloc-y := $(OBJS)
+else
 obj-$(CONFIG_QCA_CLD_WLAN) += $(MODNAME).o
 $(MODNAME)-y := $(OBJS)
+endif

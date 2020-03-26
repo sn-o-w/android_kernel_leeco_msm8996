@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -3277,6 +3277,15 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	if (!mdwc)
 		return -ENOMEM;
 
+	if (of_get_property(pdev->dev.of_node, "qcom,usb-dbm", NULL)) {
+		mdwc->dbm = usb_get_dbm_by_phandle(&pdev->dev, "qcom,usb-dbm");
+		if (IS_ERR(mdwc->dbm)) {
+			dev_err(&pdev->dev, "unable to get dbm device\n");
+			ret = -EPROBE_DEFER;
+			goto err_dbm;
+		}
+	}
+
 	mdwc->curr_mode = DWC3_PERF_INVALID;
 
 #ifdef MHL_POWER_OUT
@@ -3327,7 +3336,6 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	mdwc->id_state = DWC3_ID_FLOAT;
 	set_bit(ID, &mdwc->inputs);
-
 	mdwc->charging_disabled = of_property_read_bool(node,
 				"qcom,charging-disabled");
 
@@ -3489,13 +3497,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (of_get_property(pdev->dev.of_node, "qcom,usb-dbm", NULL)) {
-		mdwc->dbm = usb_get_dbm_by_phandle(&pdev->dev, "qcom,usb-dbm");
-		if (IS_ERR(mdwc->dbm)) {
-			dev_err(&pdev->dev, "unable to get dbm device\n");
-			ret = -EPROBE_DEFER;
-			goto err;
-		}
+	if (mdwc->dbm) {
 		/*
 		 * Add power event if the dbm indicates coming out of L1
 		 * by interrupt
@@ -3697,6 +3699,9 @@ put_psupply:
 	if (mdwc->usb_psy.dev)
 		power_supply_unregister(&mdwc->usb_psy);
 err:
+	return ret;
+err_dbm:
+	devm_kfree(&pdev->dev, mdwc);
 	return ret;
 }
 
@@ -4535,6 +4540,12 @@ static void dwc3_msm_otg_sm_work(struct work_struct *w)
 			pm_runtime_get_sync(mdwc->dev);
 			dbg_event(0xFF, "SUSP gsync",
 				atomic_read(&mdwc->dev->power.usage_count));
+		} else {
+			/*
+			 * Release PM Wakelock if PM resume had happened from
+			 * peripheral mode bus suspend case.
+			 */
+			pm_relax(mdwc->dev);
 		}
 		break;
 

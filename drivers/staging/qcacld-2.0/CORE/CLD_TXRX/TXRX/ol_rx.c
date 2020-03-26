@@ -433,6 +433,10 @@ static void ol_pop_rx_stats(htt_pdev_handle htt_pdev,
 static struct sa_rx_stats_feedback *ol_rx_feedback_alloc(uint32_t mpdu_num)
 {
 	struct sa_rx_stats_feedback *fb;
+
+	if (!sa_get_handle())
+		return NULL;
+
 	fb = adf_os_mem_alloc(NULL,
 			      sizeof(struct sa_rx_stats_feedback) +
 			      mpdu_num * sizeof(struct sa_rx_mpdu_stats));
@@ -1909,6 +1913,9 @@ static void ol_pop_user_common_array_tlv(ol_txrx_pdev_handle pdev,
 	struct ol_txrx_peer_t *peer;
 	struct sa_tx_stats_feedback ppdu_stats;
 
+	if (!sa_get_handle())
+		return;
+
 	tag_buf++;
 	ppdu_num = *tag_buf;
 	tag_buf++;
@@ -1942,7 +1949,7 @@ static void ol_pop_user_common_array_tlv(ol_txrx_pdev_handle pdev,
 		tag_buf++;
 		ppdu_stats.tx_failed_msdus =
 			HTT_PPDU_STATS_ARRAY_ITEM_TLV_TX_FAILED_MSDUS_GET(*tag_buf);
-		tag_buf += 2;
+		tag_buf += 3;
 		ppdu_stats.ack_rssi[0] = (*tag_buf) & 0xff;
 		ppdu_stats.ack_rssi[1] = ((*tag_buf) & 0xff00) >> 8;
 		tag_buf += 2;

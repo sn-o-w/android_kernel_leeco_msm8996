@@ -585,8 +585,10 @@ int xfrm_state_flush(struct net *net, u8 proto, bool task_valid)
 
 	spin_lock_bh(&net->xfrm.xfrm_state_lock);
 	err = xfrm_state_flush_secctx_check(net, proto, task_valid);
-	if (err)
+	if (err) {
+		pr_err("kp log: failed @ xfrm_state_flush_secctx_check with err [%d]\n", err);
 		goto out;
+	}
 
 	err = -ESRCH;
 	for (i = 0; i <= net->xfrm.state_hmask; i++) {
@@ -599,6 +601,7 @@ restart:
 				spin_unlock_bh(&net->xfrm.xfrm_state_lock);
 
 				err = xfrm_state_delete(x);
+				pr_err("kp log: failed @ xfrm_state_delete with err [%d]\n", err);
 				xfrm_audit_state_delete(x, err ? 0 : 1,
 							task_valid);
 				xfrm_state_put(x);
@@ -610,8 +613,10 @@ restart:
 			}
 		}
 	}
-	if (cnt)
+	if (cnt) {
+		pr_err("kp log: all state deletion with errors marking err as 0\n");
 		err = 0;
+	}
 
 out:
 	spin_unlock_bh(&net->xfrm.xfrm_state_lock);
@@ -1356,6 +1361,15 @@ out:
 		if (x1->curlft.use_time)
 			xfrm_state_check_expire(x1);
 
+		if (x->props.output_mark) {
+			spin_lock_bh(&net->xfrm.xfrm_state_lock);
+
+			x1->props.output_mark = x->props.output_mark;
+
+			__xfrm_state_bump_genids(x1);
+			spin_unlock_bh(&net->xfrm.xfrm_state_lock);
+		}
+
 		err = 0;
 		x->km.state = XFRM_STATE_DEAD;
 		__xfrm_state_put(x);
@@ -1847,11 +1861,6 @@ int xfrm_user_policy(struct sock *sk, int optname, u8 __user *optval, int optlen
 	struct xfrm_mgr *km;
 	struct xfrm_policy *pol = NULL;
 
-#ifdef CONFIG_COMPAT
-	if (is_compat_task())
-		return -EOPNOTSUPP;
-#endif
-
 	if (!optval && !optlen) {
 		xfrm_sk_policy_insert(sk, XFRM_POLICY_IN, NULL);
 		xfrm_sk_policy_insert(sk, XFRM_POLICY_OUT, NULL);
@@ -2132,7 +2141,7 @@ void xfrm_state_fini(struct net *net)
 	unsigned int sz;
 
 	flush_work(&net->xfrm.state_hash_work);
-	xfrm_state_flush(net, IPSEC_PROTO_ANY, false);
+	xfrm_state_flush(net, 0, false);
 	flush_work(&net->xfrm.state_gc_work);
 
 	WARN_ON(!list_empty(&net->xfrm.state_all));
