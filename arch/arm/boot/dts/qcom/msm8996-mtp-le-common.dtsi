@@ -552,6 +552,7 @@
 	qcom,battery-data = <&mtp_batterydata>;
 	qcom,ext-sense-type;
 	qcom,resume-soc = <99>;
+	qcom,use-otp-profile;
 };
 
 &i2c_7 {

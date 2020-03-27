@@ -180,7 +180,7 @@ static void blk_delay_work(struct work_struct *work)
 void blk_delay_queue(struct request_queue *q, unsigned long msecs)
 {
 	if (likely(!blk_queue_dead(q)))
-		queue_delayed_work(kblockd_workqueue, &q->delay_work,
+        queue_delayed_work_on(cpumask_first(cpu_online_mask),kblockd_workqueue, &q->delay_work,
 				   msecs_to_jiffies(msecs));
 }
 EXPORT_SYMBOL(blk_delay_queue);
@@ -316,7 +316,7 @@ EXPORT_SYMBOL(__blk_run_queue);
 void blk_run_queue_async(struct request_queue *q)
 {
 	if (likely(!blk_queue_stopped(q) && !blk_queue_dead(q)))
-		mod_delayed_work(kblockd_workqueue, &q->delay_work, 0);
+		mod_delayed_work_on(cpumask_first(cpu_online_mask),kblockd_workqueue, &q->delay_work, 0);
 }
 EXPORT_SYMBOL(blk_run_queue_async);
 
@@ -747,7 +747,6 @@ blk_init_allocated_queue(struct request_queue *q, request_fn_proc *rfn,
 
 fail:
 	blk_free_flush_queue(q->fq);
-	q->fq = NULL;
 	return NULL;
 }
 EXPORT_SYMBOL(blk_init_allocated_queue);
@@ -1141,7 +1140,12 @@ retry:
 	trace_block_sleeprq(q, bio, rw_flags & 1);
 
 	spin_unlock_irq(q->queue_lock);
-	io_schedule();
+	/*
+	 * FIXME: this should be io_schedule().  The timeout is there as a
+	 * workaround for some io timeout problems.
+	 */
+	io_schedule_timeout(5*HZ);
+
 
 	/*
 	 * After sleeping, we become a "batching" process and will be able
@@ -2967,7 +2971,7 @@ int blk_rq_prep_clone(struct request *rq, struct request *rq_src,
 	blk_rq_init(NULL, rq);
 
 	__rq_for_each_bio(bio_src, rq_src) {
-		bio = bio_clone_fast(bio_src, gfp_mask, bs);
+		bio = bio_clone_bioset(bio_src, gfp_mask, bs);
 		if (!bio)
 			goto free_and_out;
 
@@ -2996,14 +3000,14 @@ EXPORT_SYMBOL_GPL(blk_rq_prep_clone);
 
 int kblockd_schedule_work(struct work_struct *work)
 {
-	return queue_work(kblockd_workqueue, work);
+	return queue_work_on(cpumask_first(cpu_online_mask),kblockd_workqueue, work);
 }
 EXPORT_SYMBOL(kblockd_schedule_work);
 
 int kblockd_schedule_delayed_work(struct delayed_work *dwork,
 				  unsigned long delay)
 {
-	return queue_delayed_work(kblockd_workqueue, dwork, delay);
+	return queue_delayed_work_on(cpumask_first(cpu_online_mask),kblockd_workqueue, dwork, delay);
 }
 EXPORT_SYMBOL(kblockd_schedule_delayed_work);
 
